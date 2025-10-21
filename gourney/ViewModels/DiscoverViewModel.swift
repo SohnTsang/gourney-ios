@@ -11,10 +11,6 @@ class DiscoverViewModel: ObservableObject {
     // MARK: - Published Properties
     @Published var beenToPlaces: [PlaceWithVisits] = []
     @Published var searchResults: [PlaceSearchResult] = []
-    private var lastSearchQuery: String?
-    private var lastSearchCenter: CLLocationCoordinate2D?
-    private var searchTask: Task<Void, Never>?
-
     @Published var isLoading = false
     @Published var isSearching = false
     @Published var error: String?
@@ -37,15 +33,14 @@ class DiscoverViewModel: ObservableObject {
             return
         }
         
-        // Always run a fresh search on explicit user action
-        searchTask?.cancel()
-        searchTask = Task { await self.aggressiveCleanup() }
-
-        // reset “last” AFTER the cleanup so we truly perform the new search
-        lastSearchQuery = query
-        lastSearchCenter = mapCenter
-
-        
+        // Check duplicate search
+        if query == lastSearchQuery,
+           let lastCenter = lastSearchCenter,
+           abs(lastCenter.latitude - mapCenter.latitude) < 0.001,
+           abs(lastCenter.longitude - mapCenter.longitude) < 0.001 {
+            print("ℹ️ [Search] Skipping duplicate search")
+            return
+        }
         
         // ✅ FORCE CLEANUP before new search
         print("🧹 [Search] Force cleanup BEFORE new search")
@@ -323,35 +318,5 @@ class DiscoverViewModel: ObservableObject {
         }
         
         print("✅ [ViewModel] Force cleanup complete")
-    }
-    private func stableIdForResult(_ r: PlaceSearchResult) -> String {
-        if let id = r.dbPlaceId { return "db:\(id)" }
-        if let a  = r.applePlaceId { return "apple:\(a)" }
-        if let g  = r.googlePlaceId { return "google:\(g)" }
-        return "tmp:\(r.lat),\(r.lng)"
-    }
-
-    
-}
-
-
-
-// Build a temporary Place from a search result (used by the view)
-extension PlaceSearchResult {
-    func asEphemeralPlace() -> Place {
-        Place(
-            id: self.dbPlaceId ?? (self.applePlaceId ?? (self.googlePlaceId ?? UUID().uuidString)),
-            provider: self.source == .apple ? .apple : (self.source == .google ? .google : .database),
-            googlePlaceId: self.googlePlaceId,
-            applePlaceId: self.applePlaceId,
-            nameEn: self.nameEn, nameJa: self.nameJa, nameZh: self.nameZh,
-            lat: self.lat, lng: self.lng,
-            formattedAddress: self.formattedAddress,
-            categories: self.categories,
-            photoUrls: self.photoUrls,
-            openNow: nil, priceLevel: nil, rating: nil, userRatingsTotal: nil,
-            phoneNumber: nil, website: nil, openingHours: nil,
-            createdAt: nil, updatedAt: nil
-        )
     }
 }

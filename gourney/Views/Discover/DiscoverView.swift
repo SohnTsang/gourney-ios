@@ -348,41 +348,52 @@ struct DiscoverView: View {
     
     private func updateAnnotations() {
         MemoryDebugHelper.shared.logMemory(tag: "📍 Before (\(annotations.count) pins)")
-
+        
+        // ✅ CRITICAL: Clear old annotations FIRST
+        annotations.removeAll()
+        
         var newPins: [PinAnnotation] = []
-
+        
         if viewModel.hasActiveSearch {
-            for r in viewModel.searchResults {
-                guard r.lat >= -90, r.lat <= 90, r.lng >= -180, r.lng <= 180 else { continue }
-                let id = stableId(for: r)
-                newPins.append(
-                    PinAnnotation(id: id,
-                                  coordinate: r.coordinate,
-                                  isVisited: r.existsInDb,
-                                  kind: .search(id))
-                )
+            if !viewModel.searchResults.isEmpty {
+                print("🔎 [Annotations] Search mode - \(viewModel.searchResults.count) results")
+                
+                for result in viewModel.searchResults {
+                    guard result.lat != 0 || result.lng != 0 else { continue }
+                    guard result.lat >= -90 && result.lat <= 90 &&
+                          result.lng >= -180 && result.lng <= 180 else { continue }
+                    
+                    newPins.append(PinAnnotation(
+                        id: result.id.uuidString,
+                        coordinate: result.coordinate,
+                        isVisited: result.existsInDb,
+                        place: nil,
+                        searchResult: result
+                    ))
+                }
             }
         } else {
-            // show only items for current region the VM fetched (already bounded in VM)
-            for p in viewModel.beenToPlaces.prefix(50) {
-                let id = "db:\(p.place.id)"
-                newPins.append(
-                    PinAnnotation(id: id,
-                                  coordinate: p.place.coordinate,
-                                  isVisited: true,
-                                  kind: .place(p.place.id))
-                )
+            print("🗺️ [Annotations] Normal mode - \(viewModel.beenToPlaces.count) places")
+            
+            // ✅ LIMIT to 50 pins max for performance
+            let limitedPlaces = viewModel.beenToPlaces.prefix(50)
+            
+            for placeWithVisits in limitedPlaces {
+                let place = placeWithVisits.place
+                newPins.append(PinAnnotation(
+                    id: place.id,
+                    coordinate: place.coordinate,
+                    isVisited: true,
+                    place: place,
+                    searchResult: nil
+                ))
             }
         }
-
-        // Assign only when changed so Map can diff/reuse views
-        if newPins != annotations {
-            annotations = newPins
-            print("✅ [Annotations] Updated to \(annotations.count) pins")
-        }
-
+        
+        annotations = newPins
+        print("✅ [Annotations] Updated to \(annotations.count) pins")
+        
         MemoryDebugHelper.shared.logMemory(tag: "📍 After (\(annotations.count) pins)")
-
     }
     
     private func loadData() async {
@@ -398,51 +409,70 @@ struct DiscoverView: View {
     
     private func handlePinTap(_ item: PinAnnotation) {
         guard selectedPinId != item.id else { return }
+        
         suppressRegionRefresh = true
         selectedPinId = item.id
         updateAnnotations()
-
-        switch item.kind {
-        case .place(let placeId):
-            if let p = viewModel.beenToPlaces.first(where: { $0.place.id == placeId })?.place {
-                viewModel.selectPlace(p)
+        
+        if let place = item.place {
+            viewModel.selectPlace(place)
+            // ✅ Adjust AFTER card is shown (with small delay for sheet animation)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                adjustMapIfPinHidden(for: item.coordinate)
             }
-        case .search(let sid):
-            if let r = viewModel.searchResults.first(where: { stableId(for: $0) == sid }) {
-                viewModel.selectPlace(r.asEphemeralPlace()) // see VM helper below
+        } else if let result = item.searchResult {
+            print("🔎 [Pin Tap] Search result tapped: \(result.displayName)")
+            
+            let temporaryPlace = Place(
+                id: result.id.uuidString,
+                provider: result.source == .apple ? .apple : .google,
+                googlePlaceId: result.googlePlaceId,
+                applePlaceId: result.applePlaceId,
+                nameEn: result.nameEn,
+                nameJa: result.nameJa,
+                nameZh: result.nameZh,
+                lat: result.lat,
+                lng: result.lng,
+                formattedAddress: result.formattedAddress,
+                categories: result.categories,
+                photoUrls: result.photoUrls,
+                openNow: nil,
+                priceLevel: nil,
+                rating: nil,
+                userRatingsTotal: nil,
+                phoneNumber: nil,
+                website: nil,
+                openingHours: nil,
+                createdAt: nil,
+                updatedAt: nil
+            )
+            
+            viewModel.selectPlace(temporaryPlace)
+            // ✅ Adjust AFTER card is shown
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                adjustMapIfPinHidden(for: item.coordinate)
             }
-        }
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            adjustMapIfPinHidden(for: item.coordinate)
-            suppressRegionRefresh = false
         }
     }
-
-
     
-    func handleMapRegionChange(_ newCenter: CLLocationCoordinate2D) {
-        guard !suppressRegionRefresh else { return }
+    private func handleMapRegionChange(_ newCenter: CLLocationCoordinate2D) {
+        guard suppressRegionRefresh == false else { return }
         guard viewModel.searchResults.isEmpty else { return }
 
-        // Move threshold: 25% of current span (prevents spam refetch)
-        let minLatDelta = region.span.latitudeDelta * 0.25
-        let minLngDelta = region.span.longitudeDelta * 0.25
-        let movedLat = abs(newCenter.latitude  - (lastKnownLocation?.latitude  ?? newCenter.latitude))
-        let movedLng = abs(newCenter.longitude - (lastKnownLocation?.longitude ?? newCenter.longitude))
-        guard movedLat > minLatDelta || movedLng > minLngDelta else { return }
-        lastKnownLocation = newCenter
-
         mapRefreshTask?.cancel()
+        
         mapRefreshTask = Task {
-            try? await Task.sleep(nanoseconds: 600_000_000)
+            do {
+                try await Task.sleep(nanoseconds: 500_000_000)
+            } catch {
+                return
+            }
+            
             guard !Task.isCancelled else { return }
-            await viewModel.fetchBeenToPlaces(in: region) // VM applies the bbox
+            await viewModel.fetchBeenToPlaces(in: region)
             updateAnnotations()
         }
     }
-
-
     
     private func zoomIn() {
         let newSpan = MKCoordinateSpan(
@@ -536,14 +566,6 @@ struct DiscoverView: View {
         
         print("📍 [Auto-Pan] Animation applied ✅")
         print("📍 [Auto-Pan] === DEBUG END ===")
-    }
-    
-    // Helper to build a stable ID for search results
-    private func stableId(for r: PlaceSearchResult) -> String {
-        if let id = r.dbPlaceId { return "db:\(id)" }
-        if let a  = r.applePlaceId { return "apple:\(a)" }
-        if let g  = r.googlePlaceId { return "google:\(g)" }
-        return "tmp:\(r.lat),\(r.lng)"
     }
 
 }
@@ -678,13 +700,12 @@ struct FilterToggleView: View {
 }
 
 struct PinAnnotation: Identifiable {
-    enum Kind: Hashable { case place(String), search(String) }
     let id: String
     let coordinate: CLLocationCoordinate2D
     let isVisited: Bool
-    let kind: Kind
+    let place: Place?
+    let searchResult: PlaceSearchResult?
 }
-
 
 struct SearchBarView: View {
     @Binding var text: String
@@ -746,26 +767,6 @@ struct ErrorBanner: View {
         .background(Color.red)
         .cornerRadius(12)
         .shadow(radius: 8)
-    }
-}
-
-// Explicit conformance so we don't rely on CLLocationCoordinate2D being Hashable
-extension PinAnnotation: Equatable {
-    static func == (lhs: PinAnnotation, rhs: PinAnnotation) -> Bool {
-        lhs.id == rhs.id
-        && lhs.isVisited == rhs.isVisited
-        && lhs.kind == rhs.kind
-        && lhs.coordinate.latitude  == rhs.coordinate.latitude
-        && lhs.coordinate.longitude == rhs.coordinate.longitude
-    }
-}
-extension PinAnnotation: Hashable {
-    func hash(into h: inout Hasher) {
-        h.combine(id)
-        h.combine(isVisited)
-        h.combine(kind)
-        h.combine(coordinate.latitude.bitPattern)
-        h.combine(coordinate.longitude.bitPattern)
     }
 }
 
