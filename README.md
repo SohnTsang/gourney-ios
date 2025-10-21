@@ -1,1 +1,0 @@
-# gourney-ios
