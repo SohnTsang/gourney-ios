@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>en</string>
+		<string>ja</string>
+		<string>zh_TW</string>
+	</array>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>CFBundleURLName</key>
+            <string>com.TsangKaHo.gourney</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>gourney</string>
+            </array>
+        </dict>
+    </array>
+    <!-- Location Permission (English will be default) -->
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>We need your location to find nearby restaurants and show them on the map</string>
+
+    <!-- Privacy - Location Always and When In Use Usage Description (Optional, for background) -->
+    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+    <string>We need your location to find nearby restaurants even when the app is in the background</string>
+
+</dict>
+</plist>
