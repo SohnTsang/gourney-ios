@@ -1,5 +1,5 @@
 // Views/Discover/PlacesListView.swift
-// Scrollable list view of places with distance sorting
+// ✅ List view for places with distance sorting
 
 import SwiftUI
 import CoreLocation
@@ -8,15 +8,17 @@ struct PlacesListView: View {
     let places: [PlaceListItem]
     let onPlaceTap: (PlaceListItem) -> Void
     @Environment(\.colorScheme) private var colorScheme
-    @StateObject private var locationManager = LocationManager.shared
     
+    @StateObject private var locationManager = LocationManager.shared
+    @State private var displayedCount = 20  // ✅ ADD THIS
+
     var body: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
                 if places.isEmpty {
                     emptyState
                 } else {
-                    ForEach(places) { item in
+                    ForEach(displayedPlaces) { item in  // ✅ Changed from 'places' to 'displayedPlaces'
                         PlaceListRow(
                             item: item,
                             distance: locationManager.formattedDistance(from: item.coordinate)
@@ -26,10 +28,18 @@ struct PlacesListView: View {
                             onPlaceTap(item)
                         }
                         
-                        if item.id != places.last?.id {
+                        if item.id != displayedPlaces.last?.id {  // ✅ Changed to 'displayedPlaces'
                             Divider()
                                 .padding(.leading, 90)
                         }
+                    }
+                    
+                    // ✅ ADD THIS - Load More Trigger
+                    if hasMore {
+                        loadMoreView
+                            .onAppear {
+                                loadMore()
+                            }
                     }
                 }
             }
@@ -38,6 +48,33 @@ struct PlacesListView: View {
         .background(colorScheme == .dark ? Color(.systemBackground) : Color(.systemGroupedBackground))
     }
     
+    // ✅ ADD THESE
+    private var displayedPlaces: [PlaceListItem] {
+        Array(places.prefix(displayedCount))
+    }
+
+    private var hasMore: Bool {
+        displayedCount < places.count
+    }
+
+    private var loadMoreView: some View {
+        HStack {
+            Spacer()
+            ProgressView()
+                .padding(.vertical, 20)
+            Spacer()
+        }
+    }
+
+    private func loadMore() {
+        guard hasMore else { return }
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            withAnimation {
+                displayedCount += 20
+            }
+        }
+    }
     // MARK: - Empty State
     
     private var emptyState: some View {
@@ -150,6 +187,10 @@ struct PlaceListRow: View {
                         .aspectRatio(contentMode: .fill)
                         .frame(width: 70, height: 70)
                         .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .onDisappear {
+                            // Force image to be released when scrolled away
+                            URLCache.shared.removeCachedResponse(for: URLRequest(url: url))
+                        }
                 case .failure, .empty:
                     placeholderThumbnail
                 @unknown default:
@@ -175,7 +216,7 @@ struct PlaceListRow: View {
 
 // MARK: - Place List Item Model
 
-struct PlaceListItem: Identifiable {
+struct PlaceListItem: Identifiable, Hashable {
     let id: String
     let name: String
     let coordinate: CLLocationCoordinate2D
@@ -189,9 +230,6 @@ struct PlaceListItem: Identifiable {
     let place: Place?
     let searchResult: PlaceSearchResult?
     
-    // ✅ PERFORMANCE: Precomputed hash for equality checks
-    private let cachedHash: Int
-    
     init(from place: Place) {
         self.id = place.id
         self.name = place.displayName
@@ -203,31 +241,27 @@ struct PlaceListItem: Identifiable {
         self.isVisited = true
         self.place = place
         self.searchResult = nil
-        self.cachedHash = place.id.hashValue
     }
     
     init(from result: PlaceSearchResult) {
         self.id = result.id.uuidString
         self.name = result.displayName
         self.coordinate = result.coordinate
-        self.rating = nil // Search results don't include rating yet
+        self.rating = nil
         self.priceLevel = nil
         self.category = result.categories?.first
         self.photoUrl = result.photoUrls?.first
         self.isVisited = result.existsInDb
         self.place = nil
         self.searchResult = result
-        self.cachedHash = result.id.hashValue
     }
-}
-
-extension PlaceListItem: Hashable {
+    
     static func == (lhs: PlaceListItem, rhs: PlaceListItem) -> Bool {
         lhs.id == rhs.id
     }
     
     func hash(into hasher: inout Hasher) {
-        hasher.combine(cachedHash)
+        hasher.combine(id)
     }
 }
 

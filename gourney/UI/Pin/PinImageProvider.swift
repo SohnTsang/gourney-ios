@@ -1,128 +1,172 @@
-// Utils/PinImageProvider.swift
-// Generates custom pin images for map annotations
+//
+//  PinImageProvider.swift
+//  gourney
+//
+//  Provides teardrop-shaped pin images for map annotations
+//
 
 import UIKit
+import SwiftUI
 
-class PinImageProvider {
+enum PinImageProvider {
     
-    // MARK: - Generate Pin Image
-    
+    /// Creates a teardrop-shaped pin image
+    /// - Parameter size: Size of the pin (width, height)
+    /// - Returns: UIImage of the teardrop pin
     static func original(size: CGSize) -> UIImage {
         let renderer = UIGraphicsImageRenderer(size: size)
         
         return renderer.image { context in
-            let ctx = context.cgContext
+            let rect = CGRect(origin: .zero, size: size)
             
-            // Pin colors
-            let pinColor = UIColor(red: 1.0, green: 0.4, blue: 0.4, alpha: 1.0)
-            let shadowColor = UIColor.black.withAlphaComponent(0.3)
+            // Define teardrop path
+            let path = UIBezierPath()
             
-            // Pin shape path
-            let pinPath = UIBezierPath()
+            // Pin dimensions
+            let width = size.width
+            let height = size.height
+            let circleRadius = width / 2
+            let tipY = height
             
-            // Start from bottom point
-            pinPath.move(to: CGPoint(x: size.width / 2, y: size.height))
+            // Start at bottom tip
+            path.move(to: CGPoint(x: width / 2, y: tipY))
             
-            // Draw pin body (teardrop shape)
-            let radius = size.width / 2
-            let center = CGPoint(x: size.width / 2, y: radius)
+            // Left curve to top circle
+            path.addQuadCurve(
+                to: CGPoint(x: 0, y: circleRadius),
+                controlPoint: CGPoint(x: 0, y: height * 0.65)
+            )
             
-            // Left curve
-            pinPath.addLine(to: CGPoint(x: size.width / 2 - radius * 0.3, y: size.height - radius * 0.5))
-            
-            // Top circle arc (left side)
-            pinPath.addArc(
-                withCenter: center,
-                radius: radius,
-                startAngle: CGFloat.pi * 0.7,
-                endAngle: CGFloat.pi * 2.3,
+            // Top semicircle (left to right)
+            path.addArc(
+                withCenter: CGPoint(x: width / 2, y: circleRadius),
+                radius: circleRadius,
+                startAngle: .pi,
+                endAngle: 0,
                 clockwise: true
             )
             
-            // Right curve
-            pinPath.addLine(to: CGPoint(x: size.width / 2 + radius * 0.3, y: size.height - radius * 0.5))
-            
-            pinPath.close()
-            
-            // Draw shadow
-            ctx.saveGState()
-            ctx.setShadow(offset: CGSize(width: 0, height: 2), blur: 4, color: shadowColor.cgColor)
-            pinColor.setFill()
-            pinPath.fill()
-            ctx.restoreGState()
-            
-            // Draw inner white circle
-            let innerCircleRadius = radius * 0.4
-            let innerCircle = UIBezierPath(
-                arcCenter: center,
-                radius: innerCircleRadius,
-                startAngle: 0,
-                endAngle: CGFloat.pi * 2,
-                clockwise: true
+            // Right curve back to tip
+            path.addQuadCurve(
+                to: CGPoint(x: width / 2, y: tipY),
+                controlPoint: CGPoint(x: width, y: height * 0.65)
             )
-            UIColor.white.setFill()
-            innerCircle.fill()
             
-            // Draw fork & knife icon
-            let iconSize: CGFloat = innerCircleRadius * 1.2
+            path.close()
+            
+            // Fill with red gradient
+            let gradient = CGGradient(
+                colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                colors: [
+                    UIColor(red: 1.0, green: 0.4, blue: 0.4, alpha: 1.0).cgColor,
+                    UIColor(red: 0.95, green: 0.3, blue: 0.35, alpha: 1.0).cgColor
+                ] as CFArray,
+                locations: [0.0, 1.0]
+            )!
+            
+            context.cgContext.saveGState()
+            path.addClip()
+            
+            context.cgContext.drawLinearGradient(
+                gradient,
+                start: CGPoint(x: 0, y: 0),
+                end: CGPoint(x: width, y: height),
+                options: []
+            )
+            
+            context.cgContext.restoreGState()
+            
+            // Add white fork.knife icon
+            let iconSize: CGFloat = 16
             let iconRect = CGRect(
-                x: center.x - iconSize / 2,
-                y: center.y - iconSize / 2,
+                x: (width - iconSize) / 2,
+                y: (circleRadius - iconSize / 2),
                 width: iconSize,
                 height: iconSize
             )
             
-            // Simple fork & knife representation
-            ctx.saveGState()
-            ctx.setLineWidth(1.5)
-            pinColor.setStroke()
-            
-            // Fork (left)
-            let forkX = iconRect.minX + iconRect.width * 0.3
-            ctx.move(to: CGPoint(x: forkX, y: iconRect.minY + 2))
-            ctx.addLine(to: CGPoint(x: forkX, y: iconRect.maxY - 2))
-            ctx.strokePath()
-            
-            // Fork prongs
-            for i in 0..<3 {
-                let prongX = forkX - 2 + CGFloat(i) * 2
-                ctx.move(to: CGPoint(x: prongX, y: iconRect.minY + 2))
-                ctx.addLine(to: CGPoint(x: prongX, y: iconRect.minY + 5))
-                ctx.strokePath()
+            // Draw fork.knife symbol
+            let config = UIImage.SymbolConfiguration(pointSize: iconSize, weight: .semibold)
+            if let iconImage = UIImage(systemName: "fork.knife", withConfiguration: config) {
+                iconImage.withTintColor(.white, renderingMode: .alwaysOriginal)
+                    .draw(in: iconRect)
             }
-            
-            // Knife (right)
-            let knifeX = iconRect.maxX - iconRect.width * 0.3
-            ctx.move(to: CGPoint(x: knifeX, y: iconRect.minY + 2))
-            ctx.addLine(to: CGPoint(x: knifeX, y: iconRect.maxY - 2))
-            ctx.strokePath()
-            
-            // Knife blade
-            ctx.move(to: CGPoint(x: knifeX, y: iconRect.minY + 2))
-            ctx.addLine(to: CGPoint(x: knifeX + 2, y: iconRect.minY + 4))
-            ctx.strokePath()
-            
-            ctx.restoreGState()
         }
     }
     
-    // MARK: - Cache (Optional)
-    
-    private static var cache: [String: UIImage] = [:]
-    
-    static func cached(size: CGSize) -> UIImage {
-        let key = "\(Int(size.width))x\(Int(size.height))"
+    /// Creates an orange teardrop pin for non-visited places
+    static func nonVisited(size: CGSize) -> UIImage {
+        let renderer = UIGraphicsImageRenderer(size: size)
         
-        if let cached = cache[key] {
-            return cached
+        return renderer.image { context in
+            let rect = CGRect(origin: .zero, size: size)
+            
+            // Define teardrop path
+            let path = UIBezierPath()
+            
+            let width = size.width
+            let height = size.height
+            let circleRadius = width / 2
+            let tipY = height
+            
+            path.move(to: CGPoint(x: width / 2, y: tipY))
+            
+            path.addQuadCurve(
+                to: CGPoint(x: 0, y: circleRadius),
+                controlPoint: CGPoint(x: 0, y: height * 0.65)
+            )
+            
+            path.addArc(
+                withCenter: CGPoint(x: width / 2, y: circleRadius),
+                radius: circleRadius,
+                startAngle: .pi,
+                endAngle: 0,
+                clockwise: true
+            )
+            
+            path.addQuadCurve(
+                to: CGPoint(x: width / 2, y: tipY),
+                controlPoint: CGPoint(x: width, y: height * 0.65)
+            )
+            
+            path.close()
+            
+            // Fill with orange gradient
+            let gradient = CGGradient(
+                colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                colors: [
+                    UIColor(red: 1.0, green: 0.5, blue: 0.3, alpha: 1.0).cgColor,
+                    UIColor(red: 1.0, green: 0.4, blue: 0.2, alpha: 1.0).cgColor
+                ] as CFArray,
+                locations: [0.0, 1.0]
+            )!
+            
+            context.cgContext.saveGState()
+            path.addClip()
+            
+            context.cgContext.drawLinearGradient(
+                gradient,
+                start: CGPoint(x: 0, y: 0),
+                end: CGPoint(x: width, y: height),
+                options: []
+            )
+            
+            context.cgContext.restoreGState()
+            
+            // Add white fork.knife icon
+            let iconSize: CGFloat = 16
+            let iconRect = CGRect(
+                x: (width - iconSize) / 2,
+                y: (circleRadius - iconSize / 2),
+                width: iconSize,
+                height: iconSize
+            )
+            
+            let config = UIImage.SymbolConfiguration(pointSize: iconSize, weight: .semibold)
+            if let iconImage = UIImage(systemName: "fork.knife", withConfiguration: config) {
+                iconImage.withTintColor(.white, renderingMode: .alwaysOriginal)
+                    .draw(in: iconRect)
+            }
         }
-        
-        let image = original(size: size)
-        cache[key] = image
-        return image
-    }
-    
-    static func clearCache() {
-        cache.removeAll()
     }
 }

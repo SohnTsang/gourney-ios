@@ -10,6 +10,25 @@
     "@%@" : {
 
     },
+    "%lld" : {
+
+    },
+    "%lld friend%@ visited" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld friend%2$@ visited"
+          }
+        }
+      }
+    },
+    "0" : {
+
+    },
+    "Add to List" : {
+
+    },
     "Add Visit" : {
 
     },
@@ -775,6 +794,9 @@
     "Cancel" : {
 
     },
+    "Categories" : {
+
+    },
     "Check Your Email!" : {
 
     },
@@ -1057,7 +1079,7 @@
     "Details" : {
 
     },
-    "Discover" : {
+    "Directions" : {
 
     },
     "Discover, follow & share the Deli" : {
@@ -1203,6 +1225,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "追蹤中"
+          }
+        }
+      }
+    },
+    "discover.research_area" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Search this area"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "このエリアを検索"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋此區域"
           }
         }
       }
@@ -1417,10 +1462,16 @@
     "Feed" : {
 
     },
+    "Filter options coming soon" : {
+
+    },
     "Following" : {
 
     },
     "Gourney" : {
+
+    },
+    "Hours" : {
 
     },
     "Join Gourney today" : {
@@ -1726,7 +1777,7 @@
         }
       }
     },
-    "Please enable location access in Settings" : {
+    "Please enable location access to see nearby places" : {
 
     },
     "Powered by Apple" : {
@@ -1739,6 +1790,12 @@
 
     },
     "Settings" : {
+
+    },
+    "Share" : {
+
+    },
+    "Show Less" : {
 
     },
     "Sign In" : {

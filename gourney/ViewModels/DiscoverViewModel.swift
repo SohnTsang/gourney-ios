@@ -1,5 +1,5 @@
 // ViewModels/DiscoverViewModel.swift
-// ✅ AGGRESSIVE MEMORY CLEANUP VERSION
+// ✅ COMPLETE FIX: Proper search with DB + Apple results
 
 import Foundation
 import CoreLocation
@@ -9,6 +9,7 @@ import Combine
 @MainActor
 class DiscoverViewModel: ObservableObject {
     // MARK: - Published Properties
+    
     @Published var beenToPlaces: [PlaceWithVisits] = []
     @Published var searchResults: [PlaceSearchResult] = []
     @Published var isLoading = false
@@ -23,64 +24,41 @@ class DiscoverViewModel: ObservableObject {
     private let client = SupabaseClient.shared
     private var lastSearchQuery: String = ""
     private var lastSearchCenter: CLLocationCoordinate2D?
-    
-    // MARK: - Search Places (HYBRID) - ✅ WITH AGGRESSIVE CLEANUP
+    private var searchTask: Task<Void, Never>?
+
+    // MARK: - Search Places - ✅ COMPLETE FIX
     
     func searchPlaces(query: String, mapCenter: CLLocationCoordinate2D) async {
         guard !query.isEmpty else {
-            // ✅ AGGRESSIVE CLEANUP on empty query
             await aggressiveCleanup()
             return
         }
         
-        // Check duplicate search
-        if query == lastSearchQuery,
-           let lastCenter = lastSearchCenter,
-           abs(lastCenter.latitude - mapCenter.latitude) < 0.001,
-           abs(lastCenter.longitude - mapCenter.longitude) < 0.001 {
-            print("ℹ️ [Search] Skipping duplicate search")
-            return
-        }
-        
-        // ✅ FORCE CLEANUP before new search
-        print("🧹 [Search] Force cleanup BEFORE new search")
-        MemoryDebugHelper.shared.logMemory(tag: "🧹 Before Search Cleanup")
-        
-        // Clear old results IMMEDIATELY
-        searchResults = []
-        beenToPlaces = []
+        // ✅ 1. Clear old search results IMMEDIATELY
+        searchResults.removeAll(keepingCapacity: false)
+        beenToPlaces.removeAll(keepingCapacity: false)
         selectedPlace = nil
         showPlaceInfo = false
-        
-        // Force memory release
-        searchResults.reserveCapacity(0)
-        beenToPlaces.reserveCapacity(0)
-        
-        MemoryDebugHelper.shared.logMemory(tag: "🧹 After Search Cleanup")
         
         lastSearchQuery = query
         lastSearchCenter = mapCenter
         
         isSearching = true
         error = nil
+        hasActiveSearch = true
         
-        print("🔎 [Search] NEW SEARCH: '\(query)' at (\(mapCenter.latitude), \(mapCenter.longitude))")
+        print("🔎 [Search] NEW SEARCH: '\(query)'")
         
-        var allResults: [PlaceSearchResult] = []
+        var dbPlaceIds = Set<String>()
         
-        // TIER 1: Database Search
+        // TIER 1: Database Search (max 20 instead of 45)
         do {
-            guard !mapCenter.latitude.isNaN && !mapCenter.longitude.isNaN else {
-                isSearching = false
-                return
-            }
-
             let requestBody: [String: Any] = [
                 "query": query,
                 "lat": mapCenter.latitude,
                 "lng": mapCenter.longitude,
-                "radius": 5000,
-                "limit": 5
+                "radius": 2000,
+                "limit": 20  // ✅ Reduced from 45
             ]
             
             let response: SearchPlacesResponse = try await client.post(
@@ -88,100 +66,167 @@ class DiscoverViewModel: ObservableObject {
                 body: requestBody
             )
             
-            allResults.append(contentsOf: response.results)
-            print("✅ [Tier 1] Found \(response.results.count) database results")
+            let dbResults = response.results.filter { $0.existsInDb }
+            
+            beenToPlaces = dbResults.compactMap { result in
+                guard let placeId = result.dbPlaceId else { return nil }
+                dbPlaceIds.insert(placeId)
+                
+                let place = Place(
+                    id: placeId,
+                    provider: result.source == .apple ? .apple : .google,
+                    googlePlaceId: result.googlePlaceId,
+                    applePlaceId: result.applePlaceId,
+                    nameEn: result.nameEn,
+                    nameJa: result.nameJa,
+                    nameZh: result.nameZh,
+                    lat: result.lat,
+                    lng: result.lng,
+                    formattedAddress: result.formattedAddress,
+                    categories: result.categories,
+                    photoUrls: result.photoUrls,
+                    openNow: nil,
+                    priceLevel: nil,
+                    rating: nil,
+                    userRatingsTotal: nil,
+                    phoneNumber: nil,
+                    website: nil,
+                    openingHours: nil,
+                    createdAt: nil,
+                    updatedAt: nil
+                )
+                
+                return PlaceWithVisits(
+                    place: place,
+                    visitCount: 0,
+                    friendVisitCount: 0,
+                    visits: []
+                )
+            }
             
         } catch {
-            print("⚠️ [Tier 1] Database search failed: \(error)")
+            print("⚠️ [Tier 1] Failed: \(error)")
         }
         
-        // TIER 2: Apple MapKit (if < 5)
-        if allResults.count < 5 {
-            let region = MKCoordinateRegion(
-                center: mapCenter,
-                span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
+        // ✅ TIER 2: Apple MapKit (ALWAYS)
+        print("🎯 [Tier 2] Searching Apple Maps for: '\(query)'")
+        
+        let mapSpan = MKCoordinateSpan(latitudeDelta: 0.02, longitudeDelta: 0.02)
+        let region = MKCoordinateRegion(center: mapCenter, span: mapSpan)
+        
+        do {
+            let appleResults = try await AppleMapKitService.shared.searchPlaces(
+                query: query,
+                region: region,
+                maxResults: 10
             )
             
-            do {
-                let appleResults = try await AppleMapKitService.shared.searchPlaces(
-                    query: query,
-                    region: region
-                )
-                                
-                let needed = min(5 - allResults.count, appleResults.count)
+            print("🎯 [Tier 2] Apple returned \(appleResults.count) raw results")
+            
+            // Filter: in bounds + not in DB
+            let filteredApple = appleResults.filter { apple in
+                let latDiff = abs(apple.lat - mapCenter.latitude)
+                let lngDiff = abs(apple.lng - mapCenter.longitude)
+                let inBounds = latDiff < 0.01 && lngDiff < 0.01
                 
-                let appleSearchResults = appleResults.prefix(needed).map { apple in
-                    PlaceSearchResult(
-                        source: .apple,
-                        googlePlaceId: nil,
-                        applePlaceId: apple.applePlaceId,
-                        nameEn: apple.name,
-                        nameJa: apple.nameJa,
-                        nameZh: apple.nameZh,
-                        lat: apple.lat,
-                        lng: apple.lng,
-                        formattedAddress: apple.address,
-                        categories: apple.categories,
-                        photoUrls: nil,
-                        existsInDb: false,
-                        dbPlaceId: nil,
-                        appleFullData: ApplePlaceData(
-                            applePlaceId: apple.applePlaceId,
-                            name: apple.name,
-                            nameJa: apple.nameJa,
-                            nameZh: apple.nameZh,
-                            address: apple.address,
-                            city: apple.city,
-                            ward: apple.ward,
-                            lat: apple.lat,
-                            lng: apple.lng,
-                            phone: apple.phone,
-                            website: apple.website,
-                            categories: apple.categories
-                        )
-                    )
+                let notInDB = !beenToPlaces.contains { pv in
+                    abs(pv.place.lat - apple.lat) < 0.0001 &&
+                    abs(pv.place.lng - apple.lng) < 0.0001
                 }
                 
-                allResults.append(contentsOf: appleSearchResults)
-                
-            } catch {
-                print("⚠️ [Tier 2] Apple search failed: \(error)")
+                return inBounds && notInDB
             }
+            
+            print("🎯 [Tier 2] After filtering: \(filteredApple.count) new places")
+            
+            searchResults = filteredApple.prefix(5).map { apple in
+                PlaceSearchResult(
+                    source: .apple,
+                    googlePlaceId: nil,
+                    applePlaceId: apple.applePlaceId,
+                    nameEn: apple.name,
+                    nameJa: apple.nameJa,
+                    nameZh: apple.nameZh,
+                    lat: apple.lat,
+                    lng: apple.lng,
+                    formattedAddress: apple.address,
+                    categories: apple.categories,
+                    photoUrls: nil,
+                    existsInDb: false,
+                    dbPlaceId: nil,
+                    appleFullData: ApplePlaceData(
+                        applePlaceId: apple.applePlaceId,
+                        name: apple.name,
+                        nameJa: apple.nameJa,
+                        nameZh: apple.nameZh,
+                        address: apple.address,
+                        city: apple.city,
+                        ward: apple.ward,
+                        lat: apple.lat,
+                        lng: apple.lng,
+                        phone: apple.phone,
+                        website: apple.website,
+                        categories: apple.categories
+                    )
+                )
+            }
+            
+            print("✅ [Tier 2] Added \(searchResults.count) Apple results")
+            
+        } catch {
+            print("⚠️ [Tier 2] Failed: \(error)")
         }
         
-        searchResults = Array(allResults.prefix(5))
-        hasActiveSearch = true
+        print("✅ [Search] Complete!")
+        print("   📍 DB (red): \(beenToPlaces.count)")
+        print("   🔍 Apple (orange): \(searchResults.count)")
+        print("   📊 Total: \(beenToPlaces.count + searchResults.count)")
         
-        print("✅ [Discover] Total results: \(searchResults.count)")
-        MemoryDebugHelper.shared.logMemory(tag: "✅ After New Search")
         
         isSearching = false
+        MemoryDebugHelper.shared.logMemory(tag: "✅ After Search")
+
     }
     
     func triggerSearch(query: String, mapCenter: CLLocationCoordinate2D) {
-        Task {
+        searchTask?.cancel()
+        prepareForNewSearch()
+
+        searchTask = Task {  // ✅ Remove [weak self]
             await searchPlaces(query: query, mapCenter: mapCenter)
         }
     }
     
-    // MARK: - Clear Search - ✅ WITH AGGRESSIVE CLEANUP
+    // MARK: - Clear Search
     
     func clearSearch() {
-        print("🧹 [Search] Clearing search...")
-        MemoryDebugHelper.shared.logMemory(tag: "🧹 Before Clear")
+        print("🧹 [Search] Clearing...")
         
         Task {
             await aggressiveCleanup()
-            MemoryDebugHelper.shared.logMemory(tag: "✅ After Clear")
-            
             await fetchBeenToPlaces()
+            
+            // ✅ Force memory release
+            MemoryDebugHelper.shared.logMemory(tag: "🧹 After Cleanup")
         }
     }
+
     
-    // MARK: - ✅ NEW: Aggressive Cleanup
+    private func prepareForNewSearch() {
+        print("🧹 [Prepare] Cleaning before new search...")
+        print("   Current searchResults: \(searchResults.count)")
+        print("   Current beenToPlaces: \(beenToPlaces.count)")
+        
+        searchResults.removeAll(keepingCapacity: false)
+        beenToPlaces.removeAll(keepingCapacity: false)
+        error = nil
+        hasActiveSearch = false
+        
+        print("   ✅ Cleared for new search")
+    }
     
     private func aggressiveCleanup() async {
-        // 1. Clear all data
+        // ✅ Clear everything and drop capacity
         searchResults.removeAll(keepingCapacity: false)
         beenToPlaces.removeAll(keepingCapacity: false)
         selectedPlace = nil
@@ -191,16 +236,13 @@ class DiscoverViewModel: ObservableObject {
         lastSearchQuery = ""
         lastSearchCenter = nil
         
-        // 2. Force deallocation by setting to empty arrays
+        // ✅ Recreate empty arrays (forces deallocation)
         searchResults = []
         beenToPlaces = []
         
-        // 3. Release capacity
-        searchResults.reserveCapacity(0)
-        beenToPlaces.reserveCapacity(0)
-        
-        print("✅ [Cleanup] Aggressive cleanup complete")
+        print("✅ [Cleanup] Memory released")
     }
+
     
     // MARK: - Fetch "Been To" Places
     
@@ -209,17 +251,22 @@ class DiscoverViewModel: ObservableObject {
             return
         }
         
+        print("🗺️ [Fetch] Fetching places...")
+        print("   Region: \(region != nil ? "specified" : "default")")
+        
         isLoading = true
         error = nil
         
-        // ✅ Clear before fetching
+        // ✅ Clear old data before fetching new
+        let oldCount = beenToPlaces.count
         beenToPlaces.removeAll(keepingCapacity: false)
+        print("   🧹 Cleared \(oldCount) old places")
         
         do {
             var queryItems = [
                 URLQueryItem(name: "select", value: "id,provider,google_place_id,apple_place_id,name_en,name_ja,name_zh,lat,lng,city,ward,categories,created_at,updated_at"),
                 URLQueryItem(name: "order", value: "created_at.desc"),
-                URLQueryItem(name: "limit", value: "50")
+                URLQueryItem(name: "limit", value: "50")  // Keep at 50 for map
             ]
             
             if let region = region {
@@ -258,13 +305,16 @@ class DiscoverViewModel: ObservableObject {
             }
             
         } catch let urlError as URLError where urlError.code == .cancelled {
-            print("ℹ️ [Discover] Request cancelled")
+            print("ℹ️ [Discover] Cancelled")
         } catch {
             print("❌ [Discover] Error: \(error)")
             self.error = "Failed to load places"
         }
         
+        print("   ✅ Fetched \(beenToPlaces.count) places")
         isLoading = false
+        
+        MemoryDebugHelper.shared.logMemory(tag: "🗺️ After Fetch")
     }
     
     // MARK: - Select Place
@@ -308,15 +358,11 @@ class DiscoverViewModel: ObservableObject {
         }
     }
     
-    // MARK: - Force Cleanup - ✅ UPDATED
+    // MARK: - Force Cleanup
     
     func forceCleanup() {
-        print("🧹 [ViewModel] Force cleanup started...")
-        
-        Task {
-            await aggressiveCleanup()
-        }
-        
-        print("✅ [ViewModel] Force cleanup complete")
+        searchTask?.cancel()
+        prepareForNewSearch()
     }
 }
+

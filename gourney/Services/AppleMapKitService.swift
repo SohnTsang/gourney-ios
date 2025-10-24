@@ -5,7 +5,7 @@ import Foundation
 import MapKit
 import CoreLocation
 
-class AppleMapKitService {
+final class AppleMapKitService {
     
     static let shared = AppleMapKitService()
     
@@ -15,7 +15,9 @@ class AppleMapKitService {
     
     func searchPlaces(
         query: String,
-        region: MKCoordinateRegion
+        region: MKCoordinateRegion,
+        maxResults: Int = 5
+
     ) async throws -> [ApplePlaceResult] {
         
         // Validate query
