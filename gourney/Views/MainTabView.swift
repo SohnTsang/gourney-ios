@@ -19,11 +19,11 @@ struct MainTabView: View {
                 .tag(0)
             
             // Tab 2: Add Visit (Placeholder for Day 4)
-            AddVisitPlaceholderView()
+            PhotoUploadTestView()  // ← Test view
                 .tabItem {
                     Label(
                         NSLocalizedString("tab.add", comment: ""),
-                        systemImage: "plus.circle.fill"
+                        systemImage: selectedTab == 2 ? "plus.circle.fill" : "plus.circle"
                     )
                 }
                 .tag(1)

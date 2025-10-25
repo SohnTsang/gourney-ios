@@ -23,6 +23,9 @@
         }
       }
     },
+    "%lld%%" : {
+
+    },
     "0" : {
 
     },
@@ -1073,6 +1076,9 @@
     "Confirm Password" : {
 
     },
+    "Copy All URLs" : {
+
+    },
     "Create Account" : {
 
     },
@@ -1609,6 +1615,12 @@
     "Passwords do not match" : {
 
     },
+    "Photo %lld" : {
+
+    },
+    "Photo Upload Test" : {
+
+    },
     "place.add_visit" : {
       "comment" : "Add visit button",
       "extractionState" : "manual",
@@ -1789,6 +1801,12 @@
     "Search places..." : {
 
     },
+    "Select Photos (Max 5)" : {
+
+    },
+    "Selected: %lld photos" : {
+
+    },
     "Settings" : {
 
     },
@@ -1937,6 +1955,18 @@
 
     },
     "Try searching or adjust your filters" : {
+
+    },
+    "Upload Photos" : {
+
+    },
+    "Upload Successful!" : {
+
+    },
+    "Uploaded %lld photos" : {
+
+    },
+    "Uploading photos..." : {
 
     },
     "username" : {
