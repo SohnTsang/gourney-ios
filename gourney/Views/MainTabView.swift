@@ -1,5 +1,5 @@
 // Views/MainTabView.swift
-// Week 7 Day 3: Main tab bar with Discover tab enabled (OPTIMIZED)
+// Week 7 Day 4: Main tab bar with AddVisitView enabled for testing
 
 import SwiftUI
 
@@ -18,12 +18,12 @@ struct MainTabView: View {
                 }
                 .tag(0)
             
-            // Tab 2: Add Visit (Placeholder for Day 4)
-            PhotoUploadTestView()  // ← Test view
+            // Tab 2: Add Visit (ACTIVE - Testing)
+            AddVisitView()
                 .tabItem {
                     Label(
                         NSLocalizedString("tab.add", comment: ""),
-                        systemImage: selectedTab == 2 ? "plus.circle.fill" : "plus.circle"
+                        systemImage: selectedTab == 1 ? "plus.circle.fill" : "plus.circle"
                     )
                 }
                 .tag(1)
@@ -62,26 +62,7 @@ struct MainTabView: View {
     }
 }
 
-// MARK: - Placeholder Views (Temporary for Days 4-7)
-
-struct AddVisitPlaceholderView: View {
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 16) {
-                Image(systemName: "plus.circle")
-                    .font(.system(size: 64))
-                    .foregroundColor(.secondary)
-                Text("Add Visit")
-                    .font(.headline)
-                    .foregroundColor(.secondary)
-                Text("Coming in Day 4")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            .navigationTitle("Add Visit")
-        }
-    }
-}
+// MARK: - Placeholder Views (Temporary for Days 5-7)
 
 struct ListsPlaceholderView: View {
     var body: some View {

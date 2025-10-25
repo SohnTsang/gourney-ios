@@ -1,6 +1,9 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "" : {
+
+    },
     "·" : {
 
     },
@@ -23,10 +26,26 @@
         }
       }
     },
+    "%lld/%lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld/%2$lld"
+          }
+        }
+      }
+    },
     "%lld%%" : {
 
     },
     "0" : {
+
+    },
+    "Add New Visit" : {
+
+    },
+    "Add Photos" : {
 
     },
     "Add to List" : {
@@ -815,9 +834,6 @@
     "Closed" : {
 
     },
-    "Coming in Day 4" : {
-
-    },
     "Coming in Day 5" : {
 
     },
@@ -1297,6 +1313,9 @@
     "Email Resent!" : {
 
     },
+    "Error" : {
+
+    },
     "error.decode" : {
       "comment" : "Data error. Please try again.",
       "extractionState" : "manual",
@@ -1480,6 +1499,9 @@
     "Hours" : {
 
     },
+    "How was it?" : {
+
+    },
     "Join Gourney today" : {
 
     },
@@ -1597,6 +1619,9 @@
     "No places found" : {
 
     },
+    "OK" : {
+
+    },
     "Open" : {
 
     },
@@ -1619,6 +1644,9 @@
 
     },
     "Photo Upload Test" : {
+
+    },
+    "Photos" : {
 
     },
     "place.add_visit" : {
@@ -1792,10 +1820,19 @@
     "Please enable location access to see nearby places" : {
 
     },
+    "Post" : {
+
+    },
+    "Posting visit..." : {
+
+    },
     "Powered by Apple" : {
 
     },
     "Profile" : {
+
+    },
+    "Search for a place..." : {
 
     },
     "Search places..." : {
@@ -1811,6 +1848,12 @@
 
     },
     "Share" : {
+
+    },
+    "Share your experience..." : {
+
+    },
+    "Share your thoughts" : {
 
     },
     "Show Less" : {
@@ -1829,6 +1872,9 @@
 
     },
     "Sign up with Apple" : {
+
+    },
+    "Success! ✨" : {
 
     },
     "tab.add" : {
@@ -1973,6 +2019,15 @@
 
     },
     "We've sent a confirmation link to" : {
+
+    },
+    "Where did you visit?" : {
+
+    },
+    "Who can see this?" : {
+
+    },
+    "Your visit has been posted!" : {
 
     }
   },

@@ -234,6 +234,27 @@ struct PlaceSearchResult: Codable, Identifiable, Equatable {
     }
 }
 
+// Add to bottom of Place.swift
+extension PlaceSearchResult {
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(source, forKey: .source)
+        try container.encodeIfPresent(googlePlaceId, forKey: .googlePlaceId)
+        try container.encodeIfPresent(applePlaceId, forKey: .applePlaceId)
+        try container.encodeIfPresent(nameEn, forKey: .nameEn)
+        try container.encodeIfPresent(nameJa, forKey: .nameJa)
+        try container.encodeIfPresent(nameZh, forKey: .nameZh)
+        try container.encode(lat, forKey: .lat)
+        try container.encode(lng, forKey: .lng)
+        try container.encodeIfPresent(formattedAddress, forKey: .formattedAddress)
+        try container.encodeIfPresent(categories, forKey: .categories)
+        try container.encodeIfPresent(photoUrls, forKey: .photoUrls)
+        try container.encode(existsInDb, forKey: .existsInDb)
+        try container.encodeIfPresent(dbPlaceId, forKey: .dbPlaceId)
+        try container.encodeIfPresent(appleFullData, forKey: .appleFullData)
+    }
+}
+
 struct SearchPlacesRequest: Encodable {
     let query: String
     let latitude: Double
