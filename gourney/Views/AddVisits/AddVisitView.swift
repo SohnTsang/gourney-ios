@@ -2,28 +2,18 @@
 //  AddVisitView.swift
 //  gourney
 //
-//  Modern Add Visit View with red-pink gradient theme
-//
 
 import SwiftUI
 import PhotosUI
 import Combine
 
-// MARK: - Design System
-
-struct DesignSystem {
-    static let primaryGradient = LinearGradient(
-        colors: [Color(red: 1.0, green: 0.4, blue: 0.4), Color(red: 0.95, green: 0.3, blue: 0.35)],
-        startPoint: .topLeading,
-        endPoint: .bottomTrailing
+struct Design {
+    static let accent = Color(red: 1.0, green: 0.45, blue: 0.45)
+    static let accentGradient = LinearGradient(
+        colors: [Color(red: 1.0, green: 0.45, blue: 0.45), Color(red: 0.95, green: 0.35, blue: 0.4)],
+        startPoint: .topLeading, endPoint: .bottomTrailing
     )
-    static let primaryColor = Color(red: 1.0, green: 0.4, blue: 0.4)
-    static let lightGray = Color(.systemGray6)
-    static let cardShadow = Color.black.opacity(0.08)
-    static let activeBorderColor = Color(red: 1.0, green: 0.4, blue: 0.4)
 }
-
-// MARK: - View Model
 
 @MainActor
 class AddVisitViewModel: ObservableObject {
@@ -33,45 +23,62 @@ class AddVisitViewModel: ObservableObject {
     @Published var rating: Int = 0
     @Published var comment: String = ""
     @Published var visibility: VisitVisibility = .public
-    @Published var searchQuery: String = ""
     @Published var isUploading = false
     @Published var isSubmitting = false
     @Published var uploadProgress: Double = 0
     @Published var errorMessage: String?
     @Published var showSuccess = false
-    @Published var selectedPlace: Place?
-    @Published var applePlaceData: ApplePlaceData?
-    @Published var manualPlaceData: ManualPlaceData?
+    @Published var selectedPlaceResult: PlaceSearchResult?
+    @Published var selectedPhotoIndex: Int?
+    @Published var showSearchOverlay = false
     
     let maxPhotos = 5
     let maxCommentLength = 1000
     private let client = SupabaseClient.shared
     
     var displayPlaceName: String {
-        if let place = selectedPlace { return place.displayName }
-        if let appleData = applePlaceData { return appleData.name }
-        if let manualData = manualPlaceData { return manualData.name }
-        return ""
+        selectedPlaceResult?.displayName ?? ""
     }
     
     var hasPlace: Bool {
-        selectedPlace != nil || applePlaceData != nil || manualPlaceData != nil
+        selectedPlaceResult != nil
     }
     
     var isValid: Bool {
-        rating > 0 && (!uploadedPhotoURLs.isEmpty || !comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        hasPlace && rating > 0 && (!uploadedPhotoURLs.isEmpty || !comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
     
     func loadPhotos() async {
         guard !selectedPhotos.isEmpty else { return }
         var newImages: [UIImage] = []
+        
         for item in selectedPhotos {
             if let data = try? await item.loadTransferable(type: Data.self),
                let image = UIImage(data: data) {
-                newImages.append(image)
+                let resized = resizeImageForPreview(image)
+                newImages.append(resized)
             }
         }
+        
         await MainActor.run { self.loadedImages = newImages }
+    }
+    
+    private func resizeImageForPreview(_ image: UIImage) -> UIImage {
+        let maxSize: CGFloat = 1024
+        let originalWidth = image.size.width
+        let originalHeight = image.size.height
+        
+        if originalWidth <= maxSize && originalHeight <= maxSize {
+            return image
+        }
+        
+        let scale = min(maxSize / originalWidth, maxSize / originalHeight)
+        let newSize = CGSize(width: originalWidth * scale, height: originalHeight * scale)
+        
+        let renderer = UIGraphicsImageRenderer(size: newSize)
+        return renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: newSize))
+        }
     }
     
     func uploadPhotos() async throws {
@@ -108,6 +115,8 @@ class AddVisitViewModel: ObservableObject {
                 try await uploadPhotos()
             }
             
+            guard let placeResult = selectedPlaceResult else { return }
+            
             var requestBody: [String: Any] = [
                 "rating": rating,
                 "comment": comment.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -115,22 +124,24 @@ class AddVisitViewModel: ObservableObject {
                 "visibility": visibility.rawValue
             ]
             
-            if let placeId = selectedPlace?.id {
-                requestBody["place_id"] = placeId
-            } else if let appleData = applePlaceData {
-                requestBody["apple_place_data"] = [
-                    "apple_place_id": appleData.applePlaceId,
-                    "name": appleData.name,
-                    "address": appleData.address,
-                    "city": appleData.city,
-                    "lat": appleData.lat,
-                    "lng": appleData.lng
+            if let dbPlaceId = placeResult.dbPlaceId {
+                requestBody["place_id"] = dbPlaceId
+            } else if placeResult.source == .google, let googleId = placeResult.googlePlaceId {
+                requestBody["google_place_data"] = [
+                    "google_place_id": googleId,
+                    "name": placeResult.displayName,
+                    "address": placeResult.formattedAddress ?? "",
+                    "lat": placeResult.lat,
+                    "lng": placeResult.lng,
+                    "categories": placeResult.categories ?? []
                 ]
-            } else if let manualData = manualPlaceData {
-                requestBody["manual_place"] = [
-                    "name": manualData.name,
-                    "lat": manualData.lat,
-                    "lng": manualData.lng
+            } else if placeResult.source == .apple, let appleId = placeResult.applePlaceId {
+                requestBody["apple_place_data"] = [
+                    "apple_place_id": appleId,
+                    "name": placeResult.displayName,
+                    "address": placeResult.formattedAddress ?? "",
+                    "lat": placeResult.lat,
+                    "lng": placeResult.lng
                 ]
             }
             
@@ -142,6 +153,8 @@ class AddVisitViewModel: ObservableObject {
             await MainActor.run {
                 isSubmitting = false
                 showSuccess = true
+                loadedImages = []
+                selectedPhotos = []
             }
         } catch {
             await MainActor.run {
@@ -152,85 +165,112 @@ class AddVisitViewModel: ObservableObject {
     }
 }
 
-// MARK: - Main View
-
 struct AddVisitView: View {
     @StateObject private var viewModel = AddVisitViewModel()
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
     
     var body: some View {
-        NavigationStack {
-            ZStack {
-                (colorScheme == .dark ? Color.black : Color(.systemGroupedBackground))
-                    .ignoresSafeArea()
+        ZStack {
+            (colorScheme == .dark ? Color.black : Color(white: 0.97))
+                .ignoresSafeArea()
+            
+            VStack(spacing: 0) {
+                navigationBar
                 
-                ScrollView {
-                    VStack(spacing: 24) {
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 20) {
                         photosSection
-                        placeSearchSection
+                        placeSection
                         ratingSection
                         commentSection
                         visibilitySection
-                        Spacer(minLength: 100)
+                        Spacer(minLength: 60)
                     }
                     .padding(.top, 16)
                 }
-                
-                if viewModel.isUploading || viewModel.isSubmitting {
-                    loadingOverlay
-                }
             }
-            .navigationTitle("")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") { dismiss() }
-                        .foregroundStyle(DesignSystem.primaryColor)
-                        .fontWeight(.semibold)
-                }
-                ToolbarItem(placement: .principal) {
-                    Text("Add New Visit")
-                        .font(.system(size: 20, weight: .bold))
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Post") {
-                        Task { await viewModel.submitVisit() }
+            
+            if viewModel.isUploading || viewModel.isSubmitting {
+                loadingOverlay
+            }
+            
+            if let index = viewModel.selectedPhotoIndex {
+                fullscreenPhotoViewer(index: index)
+            }
+            
+            if viewModel.showSearchOverlay {
+                SearchPlaceOverlay(
+                    isPresented: $viewModel.showSearchOverlay,
+                    onPlaceSelected: { result in
+                        viewModel.selectedPlaceResult = result
                     }
-                    .foregroundStyle(viewModel.isValid ? DesignSystem.primaryColor : Color.gray)
-                    .fontWeight(.bold)
-                    .disabled(!viewModel.isValid)
-                }
+                )
             }
-            .alert("Success! ✨", isPresented: $viewModel.showSuccess) {
-                Button("OK") { dismiss() }
-            } message: {
-                Text("Your visit has been posted!")
+        }
+        .alert("Posted!", isPresented: $viewModel.showSuccess) {
+            Button("OK") { dismiss() }
+        }
+        .alert("Error", isPresented: .constant(viewModel.errorMessage != nil)) {
+            Button("OK") { viewModel.errorMessage = nil }
+        } message: {
+            if let error = viewModel.errorMessage {
+                Text(error)
             }
-            .alert("Error", isPresented: .constant(viewModel.errorMessage != nil)) {
-                Button("OK") { viewModel.errorMessage = nil }
-            } message: {
-                if let error = viewModel.errorMessage {
-                    Text(error)
-                }
-            }
+        }
+        .onDisappear {
+            viewModel.loadedImages = []
+            viewModel.selectedPhotos = []
         }
     }
     
+    private var navigationBar: some View {
+        HStack {
+            Button { dismiss() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(Design.accent)
+                    .frame(width: 32, height: 32)
+                    .background(Design.accent.opacity(0.1))
+                    .clipShape(Circle())
+            }
+            
+            Spacer()
+            
+            Text("Add Visit")
+                .font(.system(size: 17, weight: .semibold))
+                .lineLimit(1)
+            
+            Spacer()
+            
+            Button {
+                Task { await viewModel.submitVisit() }
+            } label: {
+                Text("Post")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundColor(.white)
+                    .frame(width: 60, height: 32)
+                    .background(viewModel.isValid ? Design.accentGradient : LinearGradient(colors: [Color.gray.opacity(0.5)], startPoint: .top, endPoint: .bottom))
+                    .clipShape(Capsule())
+            }
+            .disabled(!viewModel.isValid)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(colorScheme == .dark ? Color.black : .white)
+    }
+    
     private var photosSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Image(systemName: "photo.fill")
-                    .font(.system(size: 18))
-                    .foregroundStyle(DesignSystem.primaryGradient)
                 Text("Photos")
-                    .font(.system(size: 18, weight: .bold))
+                    .font(.system(size: 15, weight: .semibold))
                 Spacer()
                 Text("\(viewModel.loadedImages.count)/\(viewModel.maxPhotos)")
-                    .font(.system(size: 14, weight: .medium))
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundColor(.secondary)
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, 16)
             
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
@@ -240,29 +280,24 @@ struct AddVisitView: View {
                             maxSelectionCount: viewModel.maxPhotos - viewModel.loadedImages.count,
                             matching: .images
                         ) {
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 20)
-                                    .fill(DesignSystem.lightGray)
-                                    .frame(width: 120, height: 120)
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 20)
-                                            .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [8]))
-                                            .foregroundStyle(DesignSystem.primaryGradient)
-                                    )
-                                VStack(spacing: 8) {
-                                    Circle()
-                                        .fill(DesignSystem.primaryGradient)
-                                        .frame(width: 44, height: 44)
-                                        .overlay {
-                                            Image(systemName: "plus")
-                                                .font(.system(size: 20, weight: .semibold))
-                                                .foregroundColor(.white)
-                                        }
-                                    Text("Add Photos")
-                                        .font(.system(size: 13, weight: .semibold))
-                                        .foregroundStyle(DesignSystem.primaryGradient)
+                            RoundedRectangle(cornerRadius: 16)
+                                .fill(Design.accent.opacity(0.08))
+                                .frame(width: 160, height: 200)
+                                .overlay {
+                                    VStack(spacing: 8) {
+                                        Circle()
+                                            .fill(Design.accentGradient)
+                                            .frame(width: 44, height: 44)
+                                            .overlay {
+                                                Image(systemName: "plus")
+                                                    .font(.system(size: 20, weight: .semibold))
+                                                    .foregroundColor(.white)
+                                            }
+                                        Text("Add")
+                                            .font(.system(size: 13, weight: .semibold))
+                                            .foregroundColor(Design.accent)
+                                    }
                                 }
-                            }
                         }
                         .onChange(of: viewModel.selectedPhotos) { _, _ in
                             Task { await viewModel.loadPhotos() }
@@ -271,12 +306,15 @@ struct AddVisitView: View {
                     
                     ForEach(Array(viewModel.loadedImages.enumerated()), id: \.offset) { index, image in
                         ZStack(alignment: .topTrailing) {
-                            Image(uiImage: image)
-                                .resizable()
-                                .scaledToFill()
-                                .frame(width: 120, height: 120)
-                                .clipShape(RoundedRectangle(cornerRadius: 20))
-                                .shadow(color: DesignSystem.cardShadow, radius: 8, x: 0, y: 4)
+                            Button {
+                                viewModel.selectedPhotoIndex = index
+                            } label: {
+                                Image(uiImage: image)
+                                    .resizable()
+                                    .scaledToFill()
+                                    .frame(width: 160, height: 200)
+                                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                            }
                             
                             Button {
                                 withAnimation(.spring(response: 0.3)) {
@@ -285,11 +323,11 @@ struct AddVisitView: View {
                                 }
                             } label: {
                                 Circle()
-                                    .fill(Color.black.opacity(0.7))
+                                    .fill(.ultraThinMaterial)
                                     .frame(width: 28, height: 28)
                                     .overlay {
                                         Image(systemName: "xmark")
-                                            .font(.system(size: 12, weight: .bold))
+                                            .font(.system(size: 11, weight: .bold))
                                             .foregroundColor(.white)
                                     }
                             }
@@ -297,80 +335,69 @@ struct AddVisitView: View {
                         }
                     }
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, 16)
             }
         }
     }
     
-    private var placeSearchSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Image(systemName: "location.fill")
-                    .font(.system(size: 18))
-                    .foregroundStyle(DesignSystem.primaryGradient)
-                Text("Where did you visit?")
-                    .font(.system(size: 18, weight: .bold))
-            }
-            .padding(.horizontal, 20)
+    private var placeSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Where did you visit?")
+                .font(.system(size: 15, weight: .semibold))
+                .padding(.horizontal, 16)
             
-            HStack(spacing: 12) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(DesignSystem.primaryGradient)
-                    .font(.system(size: 16, weight: .semibold))
-                
-                if viewModel.hasPlace {
-                    HStack {
-                        Text(viewModel.displayPlaceName)
-                            .font(.system(size: 15))
-                        Spacer()
-                        Button {
-                            withAnimation {
-                                viewModel.selectedPlace = nil
-                                viewModel.applePlaceData = nil
-                                viewModel.manualPlaceData = nil
+            Button {
+                viewModel.showSearchOverlay = true
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(Design.accent)
+                    
+                    if viewModel.hasPlace {
+                        HStack {
+                            Text(viewModel.displayPlaceName)
+                                .font(.system(size: 15))
+                                .foregroundColor(.primary)
+                            Spacer()
+                            Button {
+                                withAnimation {
+                                    viewModel.selectedPlaceResult = nil
+                                }
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundColor(.secondary)
                             }
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundColor(.secondary)
                         }
+                    } else {
+                        Text("Search for a place")
+                            .font(.system(size: 15))
+                            .foregroundColor(.secondary)
+                        Spacer()
                     }
-                } else {
-                    TextField("Search for a place...", text: $viewModel.searchQuery)
-                        .font(.system(size: 15))
-                        .autocorrectionDisabled()
                 }
-                
-                Image(systemName: "location.circle.fill")
-                    .foregroundStyle(DesignSystem.primaryGradient)
-                    .font(.system(size: 20))
+                .padding(14)
+                .background(colorScheme == .dark ? Color(white: 0.15) : Color.white)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(
+                            viewModel.hasPlace ? Design.accent.opacity(0.5) : Color.clear,
+                            lineWidth: 1.5
+                        )
+                )
             }
-            .padding(16)
-            .background(DesignSystem.lightGray)
-            .overlay(
-                RoundedRectangle(cornerRadius: 16)
-                    .strokeBorder(
-                        viewModel.searchQuery.isEmpty && !viewModel.hasPlace ? Color.clear : DesignSystem.activeBorderColor,
-                        lineWidth: 2
-                    )
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 16))
-            .shadow(color: DesignSystem.cardShadow, radius: 6, x: 0, y: 3)
-            .padding(.horizontal, 20)
+            .padding(.horizontal, 16)
         }
     }
     
     private var ratingSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Image(systemName: "star.fill")
-                    .font(.system(size: 18))
-                    .foregroundStyle(DesignSystem.primaryGradient)
-                Text("How was it?")
-                    .font(.system(size: 18, weight: .bold))
-            }
-            .padding(.horizontal, 20)
+        VStack(alignment: .leading, spacing: 12) {
+            Text("How was it?")
+                .font(.system(size: 15, weight: .semibold))
+                .padding(.horizontal, 16)
             
-            HStack(spacing: 16) {
+            HStack(spacing: 14) {
                 ForEach(1...5, id: \.self) { star in
                     Button {
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
@@ -378,15 +405,9 @@ struct AddVisitView: View {
                         }
                     } label: {
                         Image(systemName: star <= viewModel.rating ? "star.fill" : "star")
-                            .font(.system(size: 40))
-                            .foregroundStyle(DesignSystem.primaryGradient)
-                            .shadow(
-                                color: star <= viewModel.rating ? DesignSystem.primaryColor.opacity(0.5) : .clear,
-                                radius: 8, x: 0, y: 4
-                            )
-                            .scaleEffect(star <= viewModel.rating ? 1.1 : 1.0)
+                            .font(.system(size: 28))
+                            .foregroundColor(star <= viewModel.rating ? Design.accent : Design.accent.opacity(0.3))
                     }
-                    .buttonStyle(ScaleButtonStyle())
                 }
             }
             .frame(maxWidth: .infinity)
@@ -394,27 +415,25 @@ struct AddVisitView: View {
     }
     
     private var commentSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Image(systemName: "text.bubble.fill")
-                    .font(.system(size: 18))
-                    .foregroundStyle(DesignSystem.primaryGradient)
-                Text("Share your thoughts")
-                    .font(.system(size: 18, weight: .bold))
-            }
-            .padding(.horizontal, 20)
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Share your thoughts")
+                .font(.system(size: 15, weight: .semibold))
+                .padding(.horizontal, 16)
             
             VStack(alignment: .trailing, spacing: 8) {
                 ZStack(alignment: .topLeading) {
                     if viewModel.comment.isEmpty {
                         Text("Share your experience...")
-                            .foregroundColor(.secondary.opacity(0.5))
+                            .font(.system(size: 15))
+                            .foregroundColor(.secondary.opacity(0.6))
                             .padding(.top, 12)
-                            .padding(.leading, 16)
+                            .padding(.leading, 14)
                     }
+                    
                     TextEditor(text: $viewModel.comment)
-                        .frame(minHeight: 120)
+                        .font(.system(size: 15))
                         .scrollContentBackground(.hidden)
+                        .frame(minHeight: 120)
                         .padding(8)
                         .onChange(of: viewModel.comment) { _, newValue in
                             if newValue.count > viewModel.maxCommentLength {
@@ -422,38 +441,29 @@ struct AddVisitView: View {
                             }
                         }
                 }
-                .background(DesignSystem.lightGray)
-                .clipShape(RoundedRectangle(cornerRadius: 16))
+                .background(colorScheme == .dark ? Color(white: 0.15) : Color.white)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 16)
+                    RoundedRectangle(cornerRadius: 12)
                         .strokeBorder(
-                            viewModel.comment.isEmpty ? Color.clear : DesignSystem.activeBorderColor,
-                            lineWidth: 2
+                            viewModel.comment.isEmpty ? Color.clear : Design.accent.opacity(0.5),
+                            lineWidth: 1.5
                         )
                 )
-                .shadow(color: DesignSystem.cardShadow, radius: 6, x: 0, y: 3)
                 
                 Text("\(viewModel.comment.count)/\(viewModel.maxCommentLength)")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(
-                        viewModel.comment.count >= viewModel.maxCommentLength * 9 / 10 ?
-                        DesignSystem.primaryColor : .secondary
-                    )
+                    .foregroundColor(viewModel.comment.count >= 900 ? Design.accent : .secondary)
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, 16)
         }
     }
     
     private var visibilitySection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Image(systemName: "eye.fill")
-                    .font(.system(size: 18))
-                    .foregroundStyle(DesignSystem.primaryGradient)
-                Text("Who can see this?")
-                    .font(.system(size: 18, weight: .bold))
-            }
-            .padding(.horizontal, 20)
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Who can see this?")
+                .font(.system(size: 15, weight: .semibold))
+                .padding(.horizontal, 16)
             
             VStack(spacing: 0) {
                 ForEach(VisitVisibility.allCases, id: \.self) { option in
@@ -462,19 +472,19 @@ struct AddVisitView: View {
                             viewModel.visibility = option
                         }
                     } label: {
-                        HStack(spacing: 16) {
+                        HStack(spacing: 12) {
                             Circle()
-                                .fill(viewModel.visibility == option ? DesignSystem.primaryColor : DesignSystem.lightGray)
-                                .frame(width: 44, height: 44)
+                                .fill(viewModel.visibility == option ? Design.accent : Color.gray.opacity(0.3))
+                                .frame(width: 40, height: 40)
                                 .overlay {
                                     Image(systemName: option.icon)
-                                        .font(.system(size: 18, weight: .semibold))
+                                        .font(.system(size: 16, weight: .semibold))
                                         .foregroundColor(viewModel.visibility == option ? .white : .secondary)
                                 }
                             
-                            VStack(alignment: .leading, spacing: 4) {
+                            VStack(alignment: .leading, spacing: 2) {
                                 Text(option.title)
-                                    .font(.system(size: 16, weight: .semibold))
+                                    .font(.system(size: 15, weight: .semibold))
                                     .foregroundColor(.primary)
                                 Text(option.description)
                                     .font(.system(size: 13))
@@ -485,57 +495,92 @@ struct AddVisitView: View {
                             
                             if viewModel.visibility == option {
                                 Image(systemName: "checkmark.circle.fill")
-                                    .font(.system(size: 24))
-                                    .foregroundStyle(DesignSystem.primaryGradient)
+                                    .font(.system(size: 22))
+                                    .foregroundColor(Design.accent)
                             }
                         }
-                        .padding(16)
-                        .background(viewModel.visibility == option ? DesignSystem.primaryColor.opacity(0.08) : Color.clear)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                        .background(viewModel.visibility == option ? Design.accent.opacity(0.06) : Color.clear)
                     }
                     
                     if option != VisitVisibility.allCases.last {
-                        Divider().padding(.leading, 76)
+                        Divider().padding(.leading, 66)
                     }
                 }
             }
-            .background(DesignSystem.lightGray)
-            .clipShape(RoundedRectangle(cornerRadius: 16))
-            .shadow(color: DesignSystem.cardShadow, radius: 6, x: 0, y: 3)
-            .padding(.horizontal, 20)
+            .background(colorScheme == .dark ? Color(white: 0.12) : Color.white)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .padding(.horizontal, 16)
+        }
+    }
+    
+    private func fullscreenPhotoViewer(index: Int) -> some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            
+            TabView(selection: $viewModel.selectedPhotoIndex) {
+                ForEach(Array(viewModel.loadedImages.enumerated()), id: \.offset) { i, image in
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .tag(i as Int?)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .automatic))
+            .indexViewStyle(.page(backgroundDisplayMode: .always))
+            
+            VStack {
+                HStack {
+                    Spacer()
+                    Button {
+                        viewModel.selectedPhotoIndex = nil
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(width: 36, height: 36)
+                            .background(Color.black.opacity(0.6))
+                            .clipShape(Circle())
+                    }
+                    .padding(16)
+                }
+                Spacer()
+            }
         }
     }
     
     private var loadingOverlay: some View {
         ZStack {
-            Color.black.opacity(0.4).ignoresSafeArea()
-            VStack(spacing: 20) {
+            Color.black.opacity(0.5).ignoresSafeArea()
+            
+            VStack(spacing: 16) {
                 ZStack {
                     Circle()
                         .stroke(Color.white.opacity(0.2), lineWidth: 8)
-                        .frame(width: 80, height: 80)
+                        .frame(width: 70, height: 70)
+                    
                     Circle()
                         .trim(from: 0, to: viewModel.isUploading ? viewModel.uploadProgress : 0.7)
-                        .stroke(DesignSystem.primaryGradient, style: StrokeStyle(lineWidth: 8, lineCap: .round))
-                        .frame(width: 80, height: 80)
+                        .stroke(Design.accentGradient, style: StrokeStyle(lineWidth: 8, lineCap: .round))
+                        .frame(width: 70, height: 70)
                         .rotationEffect(.degrees(-90))
                 }
-                VStack(spacing: 8) {
-                    Text(viewModel.isUploading ? "Uploading photos..." : "Posting visit...")
-                        .font(.system(size: 17, weight: .semibold))
+                
+                VStack(spacing: 6) {
+                    Text(viewModel.isUploading ? "Uploading..." : "Posting...")
+                        .font(.system(size: 16, weight: .semibold))
                         .foregroundColor(.white)
+                    
                     if viewModel.isUploading {
                         Text("\(Int(viewModel.uploadProgress * 100))%")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(.white.opacity(0.8))
+                            .font(.system(size: 14))
+                            .foregroundColor(.white.opacity(0.7))
                     }
                 }
             }
             .padding(32)
-            .background(
-                RoundedRectangle(cornerRadius: 24)
-                    .fill(Color.black.opacity(0.85))
-                    .shadow(color: .black.opacity(0.3), radius: 20, x: 0, y: 10)
-            )
+            .background(RoundedRectangle(cornerRadius: 20).fill(.ultraThinMaterial))
         }
     }
 }
@@ -546,15 +591,15 @@ enum VisitVisibility: String, CaseIterable, Codable {
     var title: String {
         switch self {
         case .public: return "Public"
-        case .friends: return "Friends Only"
+        case .friends: return "Friends"
         case .private: return "Private"
         }
     }
     var description: String {
         switch self {
-        case .public: return "Visible to everyone"
-        case .friends: return "Visible only to friends"
-        case .private: return "Visible only to you"
+        case .public: return "Everyone can see"
+        case .friends: return "Only friends"
+        case .private: return "Only you"
         }
     }
     var icon: String {
@@ -563,14 +608,6 @@ enum VisitVisibility: String, CaseIterable, Codable {
         case .friends: return "person.2.fill"
         case .private: return "lock.fill"
         }
-    }
-}
-
-struct ScaleButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed ? 0.9 : 1.0)
-            .animation(.spring(response: 0.3, dampingFraction: 0.6), value: configuration.isPressed)
     }
 }
 

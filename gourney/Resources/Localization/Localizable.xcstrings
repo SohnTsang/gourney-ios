@@ -1,9 +1,6 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    "" : {
-
-    },
     "·" : {
 
     },
@@ -39,13 +36,13 @@
     "%lld%%" : {
 
     },
+    "$$" : {
+
+    },
     "0" : {
 
     },
-    "Add New Visit" : {
-
-    },
-    "Add Photos" : {
+    "Add" : {
 
     },
     "Add to List" : {
@@ -813,6 +810,9 @@
     "Back to Sign Up" : {
 
     },
+    "Call" : {
+
+    },
     "Cancel" : {
 
     },
@@ -1087,6 +1087,9 @@
 
     },
     "Complete Your Profile" : {
+
+    },
+    "Confirm Location" : {
 
     },
     "Confirm Password" : {
@@ -1502,6 +1505,9 @@
     "How was it?" : {
 
     },
+    "In your network" : {
+
+    },
     "Join Gourney today" : {
 
     },
@@ -1611,6 +1617,9 @@
       }
     },
     "Logged in as:" : {
+
+    },
+    "New place - be the first!" : {
 
     },
     "No photos yet" : {
@@ -1823,19 +1832,28 @@
     "Post" : {
 
     },
-    "Posting visit..." : {
+    "Posted!" : {
+
+    },
+    "Posting..." : {
 
     },
     "Powered by Apple" : {
 
     },
+    "Powered by Google" : {
+
+    },
     "Profile" : {
 
     },
-    "Search for a place..." : {
+    "Search for a place" : {
 
     },
     "Search places..." : {
+
+    },
+    "Searching..." : {
 
     },
     "Select Photos (Max 5)" : {
@@ -1872,9 +1890,6 @@
 
     },
     "Sign up with Apple" : {
-
-    },
-    "Success! ✨" : {
 
     },
     "tab.add" : {
@@ -2000,6 +2015,9 @@
     "This email was already registered but not verified. We've sent you a new verification email." : {
 
     },
+    "Try a different search" : {
+
+    },
     "Try searching or adjust your filters" : {
 
     },
@@ -2015,19 +2033,22 @@
     "Uploading photos..." : {
 
     },
+    "Uploading..." : {
+
+    },
     "username" : {
 
     },
     "We've sent a confirmation link to" : {
 
     },
+    "Website" : {
+
+    },
     "Where did you visit?" : {
 
     },
     "Who can see this?" : {
-
-    },
-    "Your visit has been posted!" : {
 
     }
   },
