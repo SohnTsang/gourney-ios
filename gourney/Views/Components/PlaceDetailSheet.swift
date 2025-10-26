@@ -1,13 +1,12 @@
 // Views/Discover/Shared/PlaceDetailSheet.swift
-// ✅ SHARED component used by both PlaceInfoCard and SearchPlaceConfirmSheet
-// ✅ Uses Edge Function for consistent data fetching
-// ✅ Single source of truth - update once, applies everywhere
+// ✅ Production-grade with proper task cancellation and memory safety
+// ✅ Fixes EXC_BAD_ACCESS by proper async task lifecycle management
 
 import SwiftUI
 import CoreLocation
 
 struct PlaceDetailSheet: View {
-    // Data source - either a Place or PlaceSearchResult
+    // Data source
     let placeId: String
     let displayName: String
     let lat: Double
@@ -30,6 +29,9 @@ struct PlaceDetailSheet: View {
     @State private var visitCount: Int = 0
     @State private var isLoadingVisits = false
     @State private var refreshTrigger = UUID()
+    
+    // ✅ ADD: Task tracking for proper cancellation
+    @State private var loadTask: Task<Void, Never>?
     
     var body: some View {
         GeometryReader { geometry in
@@ -54,12 +56,12 @@ struct PlaceDetailSheet: View {
                             
                             // Rating with distance badge
                             RatingWithDistanceView(
-                                rating: nil,  // Edge Function doesn't return rating yet
+                                rating: nil,
                                 distance: calculateDistance()
                             )
                             .padding(.bottom, 4)
                             
-                            // Address (small font, under rating)
+                            // Address
                             if let address = formattedAddress, !address.isEmpty {
                                 AddressView(address: address)
                                     .padding(.bottom, 16)
@@ -140,7 +142,18 @@ struct PlaceDetailSheet: View {
         .presentationDragIndicator(.hidden)
         .id(refreshTrigger)
         .task {
-            await loadVisits()
+            // ✅ FIXED: Store task reference for proper cancellation
+            loadTask = Task {
+                await loadVisits()
+            }
+            
+            // Wait for task completion or cancellation
+            await loadTask?.value
+        }
+        .onDisappear {
+            // ✅ CRITICAL: Cancel task when view disappears
+            loadTask?.cancel()
+            loadTask = nil
         }
     }
     
@@ -150,7 +163,6 @@ struct PlaceDetailSheet: View {
     private var photoSection: some View {
         let photoSize: CGFloat = 200
         
-        // Show photos from photoUrls (Google/Apple preview photos)
         if let photoUrls = photoUrls, !photoUrls.isEmpty {
             PhotoGridView(photos: Array(photoUrls.prefix(10)), photoSize: photoSize)
                 .padding(.top, 30)
@@ -160,90 +172,162 @@ struct PlaceDetailSheet: View {
         }
     }
     
-    // MARK: - Data Loading (Edge Function)
+    // MARK: - Data Loading
     
     private func loadVisits() async {
-        isLoadingVisits = true
+        // ✅ Check for cancellation early
+        guard !Task.isCancelled else { return }
+        
+        await MainActor.run {
+            isLoadingVisits = true
+        }
         
         print("🔍 [PlaceDetail] Opening place - ID: \(placeId), Name: \(displayName)")
-        print("🔍 [PlaceDetail] Auth status - isAuthenticated: \(AuthManager.shared.isAuthenticated)")
         
-        do {
-            // ✅ Use Edge Function with manual URLSession (no snake_case auto-conversion)
-            let url = "\(Config.supabaseURL)/functions/v1/places-get-visits/\(placeId)?limit=10&friends_only=false"
-            guard let requestURL = URL(string: url) else {
-                throw APIError.invalidResponse
-            }
-            
-            var request = URLRequest(url: requestURL)
-            request.httpMethod = "GET"
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.setValue(Config.supabaseAnonKey, forHTTPHeaderField: "apikey")
-            request.setValue("v1", forHTTPHeaderField: "X-API-Version")  // ✅ REQUIRED by Edge Function
-            
-            // Add auth token
-            if let token = SupabaseClient.shared.getAuthToken() {
-                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            }
-            
-            let (data, urlResponse) = try await URLSession.shared.data(for: request)
-            
-            guard let httpResponse = urlResponse as? HTTPURLResponse else {
-                throw APIError.invalidResponse
-            }
-            
-            print("📥 [PlaceDetail] Response: \(httpResponse.statusCode)")
-            
-            // Handle errors
-            if httpResponse.statusCode == 401 {
-                throw APIError.unauthorized
-            }
-            
-            guard (200...299).contains(httpResponse.statusCode) else {
-                // Log the actual error response
-                if let errorString = String(data: data, encoding: .utf8) {
-                    print("❌ [PlaceDetail] Error response body: \(errorString)")
-                }
-                throw APIError.serverError
-            }
-            
-            // ✅ Manual decoding WITHOUT snake_case conversion
-            let decoder = JSONDecoder()
-            // DON'T set keyDecodingStrategy - let our custom CodingKeys handle it
-            
-            let response = try decoder.decode(PlaceVisitsResponse.self, from: data)
-            
-            await MainActor.run {
-                visits = response.visits
-                visitCount = response.visitCount
-                isLoadingVisits = false
-            }
-            
-            print("✅ [PlaceDetail] Loaded \(response.visits.count) visits, total count: \(response.visitCount)")
-            
-        } catch let error as APIError {
-            print("❌ [PlaceDetail] API Error: \(error)")
-            print("❌ [PlaceDetail] Error description: \(error.errorDescription ?? "unknown")")
-            
-            if case .unauthorized = error {
-                print("⚠️ [PlaceDetail] User not authenticated - triggering auth refresh")
-                Task { @MainActor in
-                    await AuthManager.shared.checkAuthStatus()
-                }
-            }
-            
+        // ✅ CRITICAL: Validate token before making request
+        let tokenValid = await SupabaseClient.shared.ensureValidToken()
+        if !tokenValid {
+            print("❌ [PlaceDetail] Token validation failed")
             await MainActor.run {
                 visits = []
                 visitCount = 0
                 isLoadingVisits = false
             }
-        } catch {
-            print("❌ [PlaceDetail] Unexpected error: \(error)")
-            await MainActor.run {
-                visits = []
-                visitCount = 0
-                isLoadingVisits = false
+            return
+        }
+        
+        // Attempt request (with one retry on 401)
+        var attempts = 0
+        let maxAttempts = 2
+        
+        while attempts < maxAttempts {
+            attempts += 1
+            
+            do {
+                let url = "\(Config.supabaseURL)/functions/v1/places-get-visits/\(placeId)?limit=10&friends_only=false"
+                guard let requestURL = URL(string: url) else {
+                    throw APIError.invalidResponse
+                }
+                
+                var request = URLRequest(url: requestURL)
+                request.httpMethod = "GET"
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.setValue(Config.supabaseAnonKey, forHTTPHeaderField: "apikey")
+                request.setValue("v1", forHTTPHeaderField: "X-API-Version")
+                
+                // ✅ Get fresh token (may have been refreshed)
+                if let token = SupabaseClient.shared.getAuthToken() {
+                    request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                    
+                    if let diagnostics = SupabaseClient.shared.diagnoseToken() {
+                        diagnostics.printDiagnostics()
+                    }
+                } else {
+                    print("⚠️ [PlaceDetail] No auth token available")
+                }
+                
+                // ✅ Check cancellation before network call
+                guard !Task.isCancelled else { return }
+                
+                let (data, urlResponse) = try await URLSession.shared.data(for: request)
+                
+                // ✅ Check cancellation after network call
+                guard !Task.isCancelled else { return }
+                
+                guard let httpResponse = urlResponse as? HTTPURLResponse else {
+                    throw APIError.invalidResponse
+                }
+                
+                print("📥 [PlaceDetail] Response: \(httpResponse.statusCode) (attempt \(attempts)/\(maxAttempts))")
+                
+                // Handle 401 - refresh and retry once
+                if httpResponse.statusCode == 401 {
+                    if attempts < maxAttempts {
+                        print("⚠️ [PlaceDetail] Got 401, refreshing token and retrying...")
+                        
+                        // Trigger refresh
+                        if let refreshHandler = SupabaseClient.shared.authRefreshHandler {
+                            let refreshed = await refreshHandler()
+                            if refreshed {
+                                print("✅ [PlaceDetail] Token refreshed, retrying request...")
+                                continue // Retry the request
+                            } else {
+                                print("❌ [PlaceDetail] Token refresh failed")
+                                throw APIError.unauthorized
+                            }
+                        } else {
+                            print("❌ [PlaceDetail] No refresh handler available")
+                            throw APIError.unauthorized
+                        }
+                    } else {
+                        print("❌ [PlaceDetail] Max retry attempts reached")
+                        throw APIError.unauthorized
+                    }
+                }
+                
+                guard (200...299).contains(httpResponse.statusCode) else {
+                    if let errorString = String(data: data, encoding: .utf8) {
+                        print("❌ [PlaceDetail] Error response body: \(errorString)")
+                    }
+                    throw APIError.serverError
+                }
+                
+                let decoder = JSONDecoder()
+                let response = try decoder.decode(PlaceVisitsResponse.self, from: data)
+                
+                // ✅ Check cancellation before updating UI
+                guard !Task.isCancelled else { return }
+                
+                await MainActor.run {
+                    visits = response.visits
+                    visitCount = response.visitCount
+                    isLoadingVisits = false
+                }
+                
+                print("✅ [PlaceDetail] Loaded \(response.visits.count) visits, total count: \(response.visitCount)")
+                return // Success - exit loop
+                
+            } catch is CancellationError {
+                print("⚠️ [PlaceDetail] Task cancelled")
+                await MainActor.run {
+                    isLoadingVisits = false
+                }
+                return
+            } catch let error as APIError {
+                // ✅ Only update UI if not cancelled
+                guard !Task.isCancelled else { return }
+                
+                print("❌ [PlaceDetail] API Error: \(error)")
+                
+                // Don't retry on non-auth errors
+                if case .unauthorized = error {
+                    // Already handled above with retry logic
+                } else {
+                    await MainActor.run {
+                        visits = []
+                        visitCount = 0
+                        isLoadingVisits = false
+                    }
+                    return
+                }
+            } catch {
+                guard !Task.isCancelled else { return }
+                
+                print("❌ [PlaceDetail] Unexpected error: \(error)")
+                await MainActor.run {
+                    visits = []
+                    visitCount = 0
+                    isLoadingVisits = false
+                }
+                return
             }
+        }
+        
+        // If we get here, all retries failed
+        await MainActor.run {
+            visits = []
+            visitCount = 0
+            isLoadingVisits = false
         }
     }
     
@@ -281,9 +365,7 @@ struct PlaceDetailSheet: View {
     }
 }
 
-// MARK: - Edge Function Response Models (Shared)
-
-// MARK: - Edge Function Response Models (Updated with photo_urls)
+// MARK: - Edge Function Response Models
 
 struct PlaceVisitsResponse: Codable {
     let place: PlaceInfo
@@ -308,11 +390,11 @@ struct EdgeFunctionVisit: Codable, Identifiable {
     let userId: String
     let rating: Int?
     let comment: String?
-    let photoUrls: [String]  // ✅ ADDED - now includes photos!
+    let photoUrls: [String]
     let visitedAt: String
     let userHandle: String
-    let userDisplayName: String?  // ✅ ADDED for better UX
-    let userAvatarUrl: String?    // ✅ ADDED for better UX
+    let userDisplayName: String?
+    let userAvatarUrl: String?
     
     enum CodingKeys: String, CodingKey {
         case id
@@ -326,7 +408,6 @@ struct EdgeFunctionVisit: Codable, Identifiable {
         case userAvatarUrl = "user_avatar_url"
     }
     
-    // ✅ Custom decoder to handle exact field names from Edge Function
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         

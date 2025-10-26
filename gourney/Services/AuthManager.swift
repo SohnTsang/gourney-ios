@@ -23,11 +23,21 @@ class AuthManager: ObservableObject {
     @Published var needsProfileCompletion = false
     @Published var emailConfirmationRequired = false
     
+    private let refreshTokenKey = "refresh_token"
+    private var isRefreshing = false
+
+    
     private init() {
-        Task {
-            await checkAuthStatus()
+        // Allow HTTP client to refresh once on 401 and retry
+        SupabaseClient.shared.authRefreshHandler = { [weak self] in
+            guard let self = self else { return false }
+            return await self.refreshSession()
         }
+
+        Task { await checkAuthStatus() }
     }
+
+
     
     // MARK: - Auth Status Check
     
@@ -64,7 +74,7 @@ class AuthManager: ObservableObject {
                 requiresAuth: false
             )
             
-            client.setAuthToken(response.accessToken)
+            saveSession(accessToken: response.accessToken, refreshToken: response.refreshToken)
             await fetchCurrentUser()
             
             // Check if profile is complete
@@ -487,7 +497,7 @@ class AuthManager: ObservableObject {
             print("✅ [Apple Auth] Supabase response received")
             print("🎯 [Apple Auth] User ID from Supabase: \(response.user.id)")
             
-            client.setAuthToken(response.accessToken)
+            saveSession(accessToken: response.accessToken, refreshToken: response.refreshToken)
             print("✅ [Apple Auth] Token saved")
             
             // CRITICAL: Always fetch the current user from database
@@ -744,66 +754,6 @@ class AuthManager: ObservableObject {
         }
     }
     
-    // MARK: - Fetch Current User
-    
-    private func fetchCurrentUser() async {
-        do {
-            print("👤 [Fetch User] Fetching current user profile...")
-            
-            // Get the user ID from the token
-            guard let token = client.getAuthToken() else {
-                print("❌ [Fetch User] No auth token found")
-                currentUser = nil
-                return
-            }
-            
-            guard let userId = extractUserIdFromToken(token) else {
-                print("❌ [Fetch User] Could not extract user ID from token")
-                currentUser = nil
-                return
-            }
-            
-            print("👤 [Fetch User] User ID from token: \(userId)")
-            print("👤 [Fetch User] Token length: \(token.count)")
-            
-            // Query with explicit user ID filter
-            let users: [User] = try await client.get(
-                path: "/rest/v1/users",
-                queryItems: [
-                    URLQueryItem(name: "id", value: "eq.\(userId)"),
-                    URLQueryItem(name: "select", value: "*")
-                ],
-                requiresAuth: true // CRITICAL: Must be true for RLS
-            )
-            
-            print("👤 [Fetch User] Query returned \(users.count) user(s)")
-            
-            if let user = users.first {
-                currentUser = user
-                print("✅ [Fetch User] Fetched user successfully")
-                print("👤 [Fetch User] ID: \(user.id)")
-                print("👤 [Fetch User] Handle: @\(user.handle)")
-                print("👤 [Fetch User] Display Name: '\(user.displayName)'")
-                print("👤 [Fetch User] Email: \(user.email ?? "none")")
-                print("👤 [Fetch User] Home City: \(user.homeCity ?? "none")")
-                print("👤 [Fetch User] Created At: \(user.createdAt ?? "none")")
-            } else {
-                print("❌ [Fetch User] No user found in database with ID: \(userId)")
-                print("❌ [Fetch User] This means either:")
-                print("   1. User profile was never created in database")
-                print("   2. RLS policy is blocking the SELECT")
-                print("   3. User ID from token doesn't match database")
-                currentUser = nil
-            }
-        } catch {
-            print("❌ [Fetch User] Error fetching user: \(error)")
-            if let apiError = error as? APIError {
-                print("❌ [Fetch User] API Error details: \(apiError)")
-                print("❌ [Fetch User] Error description: \(apiError.errorDescription ?? "none")")
-            }
-            currentUser = nil
-        }
-    }
     
     // MARK: - Error Handling
     
@@ -939,6 +889,55 @@ class AuthManager: ObservableObject {
             signOut()
         }
     }
+
+    private func currentRefreshToken() -> String? {
+        UserDefaults.standard.string(forKey: refreshTokenKey)
+    }
+    
+    /// Attempts to refresh the session. Returns true on success.
+    func refreshSession() async -> Bool {
+        if isRefreshing { return false }
+        isRefreshing = true
+        defer { isRefreshing = false }
+
+        guard let rt = UserDefaults.standard.string(forKey: refreshTokenKey) else {
+            print("❌ [Auth] No refresh token available")
+            return false
+        }
+
+        struct RefreshPayload: Encodable { let refresh_token: String }
+        do {
+            // NOTE: For refresh, we do NOT require auth headers
+            let refreshed: AuthResponse = try await client.post(
+                path: "/auth/v1/token",
+                body: ["refresh_token": rt],
+                queryItems: [URLQueryItem(name: "grant_type", value: "refresh_token")],
+                requiresAuth: false
+            )
+            // Minimal, MainActor-safe state write
+            await saveSession(accessToken: refreshed.accessToken, refreshToken: refreshed.refreshToken)
+            print("✅ [Auth] Session refreshed")
+            isAuthenticated = true
+            return true
+        } catch {
+            print("❌ [Auth] Refresh failed: \(error)")
+            // Hard sign-out on failed refresh
+            client.clearAuthToken()
+            UserDefaults.standard.removeObject(forKey: refreshTokenKey)
+            isAuthenticated = false
+            currentUser = nil
+            return false
+        }
+    }
+    
+    @MainActor
+    private func saveSession(accessToken: String, refreshToken: String?) {
+        client.setAuthToken(accessToken)
+        if let rt = refreshToken {
+            UserDefaults.standard.set(rt, forKey: refreshTokenKey)
+        }
+    }
+
 }
 
 // MARK: - Auth Response Models
@@ -957,4 +956,117 @@ struct AuthUser: Decodable {
     let phone: String?
     let role: String?
     let createdAt: String?
+}
+
+// AuthManager+FetchUser.swift
+// ✅ Enhanced user fetching with token validation
+// Add this to your AuthManager.swift or create as extension
+
+extension AuthManager {
+    
+    // MARK: - Enhanced Fetch Current User with Token Validation
+    
+    func fetchCurrentUserSafe() async {
+        // ✅ STEP 1: Check token exists
+        guard let token = client.getAuthToken() else {
+            print("❌ [Fetch User] No auth token found")
+            await MainActor.run {
+                currentUser = nil
+                isAuthenticated = false
+            }
+            return
+        }
+        
+        // ✅ STEP 2: Validate token is not expired
+        if let diagnostics = SupabaseClient.shared.diagnoseToken() {
+            diagnostics.printDiagnostics()
+            
+            if diagnostics.isExpired {
+                print("⚠️ [Fetch User] Token expired, attempting refresh...")
+                let refreshed = await refreshSession()
+                if !refreshed {
+                    print("❌ [Fetch User] Refresh failed, user needs to sign in again")
+                    await MainActor.run {
+                        currentUser = nil
+                        isAuthenticated = false
+                    }
+                    return
+                }
+            } else if diagnostics.needsRefresh {
+                print("⚠️ [Fetch User] Token expiring soon, refreshing proactively...")
+                // Don't wait for refresh, just trigger it in background
+                Task.detached(priority: .background) {
+                    await AuthManager.shared.refreshSession()
+                }
+            }
+        }
+        
+        // ✅ STEP 3: Extract user ID from token
+        guard let userId = extractUserIdFromToken(token) else {
+            print("❌ [Fetch User] Could not extract user ID from token")
+            await MainActor.run {
+                currentUser = nil
+                isAuthenticated = false
+            }
+            return
+        }
+        
+        print("👤 [Fetch User] Fetching user profile for ID: \(userId)")
+        
+        // ✅ STEP 4: Fetch user with proper error handling
+        do {
+            let users: [User] = try await client.get(
+                path: "/rest/v1/users",
+                queryItems: [
+                    URLQueryItem(name: "id", value: "eq.\(userId)"),
+                    URLQueryItem(name: "select", value: "*")
+                ],
+                requiresAuth: true
+            )
+            
+            if let user = users.first {
+                await MainActor.run {
+                    currentUser = user
+                    isAuthenticated = true
+                }
+                print("✅ [Fetch User] Successfully fetched user: @\(user.handle)")
+            } else {
+                print("❌ [Fetch User] No user found with ID: \(userId)")
+                await MainActor.run {
+                    currentUser = nil
+                    isAuthenticated = false
+                }
+            }
+            
+        } catch let error as APIError {
+            print("❌ [Fetch User] API Error: \(error)")
+            
+            // Only mark as unauthenticated on 401, not on network errors
+            if case .unauthorized = error {
+                print("⚠️ [Fetch User] Unauthorized - attempting one refresh...")
+                let refreshed = await refreshSession()
+                if refreshed {
+                    // Retry once after refresh
+                    await fetchCurrentUserSafe()
+                } else {
+                    await MainActor.run {
+                        currentUser = nil
+                        isAuthenticated = false
+                    }
+                }
+            } else {
+                // Network error or other issue - keep existing auth state
+                print("⚠️ [Fetch User] Temporary error, keeping existing auth state")
+            }
+            
+        } catch {
+            print("❌ [Fetch User] Unexpected error: \(error)")
+            // Don't change auth state on unexpected errors
+        }
+    }
+    
+    // Keep the original for backwards compatibility
+    func fetchCurrentUser() async {
+        await fetchCurrentUserSafe()
+    }
 }

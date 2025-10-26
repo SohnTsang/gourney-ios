@@ -35,7 +35,10 @@ struct DiscoverView: View {
     @State private var lastClusteringRegion: MKCoordinateRegion?
     
     var body: some View {
+        
+        
         NavigationStack {
+            
             ZStack(alignment: .top) {
                 // ✅ Map or List View
                 if showListView {
@@ -1072,3 +1075,4 @@ struct ErrorBanner: View {
 #Preview {
     DiscoverView()
 }
+
