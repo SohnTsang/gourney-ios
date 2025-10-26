@@ -396,7 +396,7 @@ class SearchPlaceViewModel: ObservableObject {
     }
 }
 
-// Add this to SearchPlaceOverlay.swift - Replace SearchPlaceConfirmSheet
+// MARK: - ✅ FIXED: Now uses EXACT same components as PlaceInfoCard
 
 struct SearchPlaceConfirmSheet: View {
     let result: PlaceSearchResult
@@ -428,74 +428,39 @@ struct SearchPlaceConfirmSheet: View {
                                 .foregroundColor(.primary)
                                 .padding(.bottom, 8)
                             
-                            // Rating
-                            ratingSection
-                                .padding(.bottom, 4)
+                            // ✅ Rating with distance badge (SAME as PlaceInfoCard)
+                            RatingWithDistanceView(
+                                rating: nil,
+                                distance: calculateDistance()
+                            )
+                            .padding(.bottom, 4)
                             
-                            // Categories
-                            if let categories = result.categories, !categories.isEmpty {
-                                Text(categories.prefix(3).joined(separator: " · "))
-                                    .font(.system(size: 14))
-                                    .foregroundColor(.secondary)
+                            // ✅ Address (small font, under rating - SAME as PlaceInfoCard)
+                            if let address = result.formattedAddress, !address.isEmpty {
+                                AddressView(address: address)
                                     .padding(.bottom, 16)
                             }
                             
-                            // Visit status - ✅ NOW SHOWS REAL VISITS
+                            // Visit status
                             VisitStatusView(visitCount: visits.count, isLoading: isLoadingVisits)
                                 .padding(.bottom, 16)
                             
                             Divider()
                                 .padding(.vertical, 16)
                             
-                            // Address
-                            if let address = result.formattedAddress, !address.isEmpty {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    HStack(spacing: 10) {
-                                        Circle()
-                                            .strokeBorder(Color(red: 1.0, green: 0.4, blue: 0.4), lineWidth: 2)
-                                            .frame(width: 32, height: 32)
-                                            .overlay {
-                                                Image(systemName: "mappin")
-                                                    .font(.system(size: 14, weight: .semibold))
-                                                    .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
-                                            }
-                                        
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text("Address")
-                                                .font(.system(size: 12, weight: .medium))
-                                                .foregroundColor(.secondary)
-                                            Text(address)
-                                                .font(.system(size: 15, weight: .semibold))
-                                                .foregroundColor(.primary)
-                                        }
-                                        
-                                        Spacer()
-                                    }
-                                    
-                                    // Distance
-                                    if let distance = calculateDistance() {
-                                        Text(distance)
-                                            .font(.system(size: 13))
-                                            .foregroundColor(.secondary)
-                                            .padding(.leading, 42)
-                                    }
-                                }
-                            }
-                            
-                            // Phone
+                            // Phone (SAME as PlaceInfoCard)
                             if let phone = result.appleFullData?.phone, !phone.isEmpty {
-                                Divider().padding(.vertical, 12)
                                 PhoneButton(phone: phone)
-                            }
-                            
-                            // Website
-                            if let website = result.appleFullData?.website, !website.isEmpty {
                                 Divider().padding(.vertical, 12)
-                                WebsiteButton(website: website)
                             }
                             
-                            // Directions
-                            Divider().padding(.vertical, 12)
+                            // Website (SAME as PlaceInfoCard)
+                            if let website = result.appleFullData?.website, !website.isEmpty {
+                                WebsiteButton(website: website)
+                                Divider().padding(.vertical, 12)
+                            }
+                            
+                            // Directions (SAME as PlaceInfoCard)
                             DirectionsButton(
                                 placeName: result.displayName,
                                 address: result.formattedAddress ?? ""
@@ -507,23 +472,37 @@ struct SearchPlaceConfirmSheet: View {
                     }
                 }
                 
+                // ✅ ONLY DIFFERENCE: Button text is "Confirm Location" instead of "Add Visit"
                 VStack(spacing: 0) {
-                    Button {
-                        onConfirm(result)
-                    } label: {
-                        Text("Confirm Location")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 14)
-                            .background(
-                                LinearGradient(
-                                    colors: [Color(red: 1.0, green: 0.4, blue: 0.4), Color(red: 0.95, green: 0.3, blue: 0.35)],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
+                    HStack(spacing: 12) {
+                        Button {
+                            onConfirm(result)
+                        } label: {
+                            Text("Confirm Location")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundColor(.white)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 14)
+                                .background(
+                                    LinearGradient(
+                                        colors: [Color(red: 1.0, green: 0.4, blue: 0.4), Color(red: 0.95, green: 0.3, blue: 0.35)],
+                                        startPoint: .leading,
+                                        endPoint: .trailing
+                                    )
                                 )
-                            )
-                            .cornerRadius(12)
+                                .cornerRadius(12)
+                        }
+                        
+                        Button {
+                            sharePlace()
+                        } label: {
+                            Image(systemName: "square.and.arrow.up")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.primary)
+                                .frame(width: 48, height: 48)
+                                .background(Color(.systemGray6))
+                                .cornerRadius(12)
+                        }
                     }
                     .padding(.horizontal, 20)
                     .padding(.top, 12)
@@ -533,36 +512,15 @@ struct SearchPlaceConfirmSheet: View {
             }
         }
         .background(colorScheme == .dark ? Color(.systemBackground) : Color.white)
+        .presentationDragIndicator(.hidden)
         .task {
-            // ✅ Load visits if place exists in DB
             if result.existsInDb, let placeId = result.dbPlaceId {
                 await loadVisits(placeId: placeId)
             }
         }
     }
     
-    // MARK: - Components
-    
-    @ViewBuilder
-    private var ratingSection: some View {
-        HStack(spacing: 4) {
-            Text(ratingText)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundColor(.primary)
-            
-            HStack(spacing: 2) {
-                ForEach(0..<5) { index in
-                    Image(systemName: "star")
-                        .font(.system(size: 10))
-                        .foregroundColor(.gray)
-                }
-            }
-        }
-    }
-    
-    private var ratingText: String {
-        return "0"
-    }
+    // MARK: - Photo Section (SAME as PlaceInfoCard)
     
     @ViewBuilder
     private var photoSection: some View {
@@ -590,7 +548,7 @@ struct SearchPlaceConfirmSheet: View {
         }
     }
     
-    // MARK: - Data Loading
+    // MARK: - Data Loading (SAME as PlaceInfoCard)
     
     private func loadVisits(placeId: String) async {
         isLoadingVisits = true
@@ -623,7 +581,7 @@ struct SearchPlaceConfirmSheet: View {
         }
     }
     
-    // MARK: - Helpers
+    // MARK: - Helpers (SAME as PlaceInfoCard)
     
     private func calculateDistance() -> String? {
         guard let userLocation = locationManager.userLocation else { return nil }
@@ -633,9 +591,26 @@ struct SearchPlaceConfirmSheet: View {
         let distance = userCLLocation.distance(from: placeLocation)
         
         if distance < 1000 {
-            return String(format: "%.0f m away", distance)
+            return String(format: "%.0f m", distance)
         } else {
-            return String(format: "%.1f km away", distance / 1000)
+            return String(format: "%.1f km", distance / 1000)
+        }
+    }
+    
+    private func sharePlace() {
+        guard let url = URL(string: result.appleFullData?.website ?? "https://gourney.app/place/\(result.googlePlaceId ?? "")") else { return }
+        
+        let activityVC = UIActivityViewController(
+            activityItems: [
+                "\(result.displayName)\n\(result.formattedAddress ?? "")",
+                url
+            ],
+            applicationActivities: nil
+        )
+        
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let rootVC = windowScene.windows.first?.rootViewController {
+            rootVC.present(activityVC, animated: true)
         }
     }
 }
