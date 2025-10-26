@@ -2,11 +2,7 @@
 //  SupabaseClient.swift
 //  gourney
 //
-//  Created by 曾家浩 on 2025/10/16.
-//
-
-// Services/SupabaseClient.swift
-// Week 7 Day 1: Supabase API client with authentication
+//  ✅ FIXED: Handles 3xx redirects and adds URL logging
 
 import Foundation
 
@@ -114,7 +110,8 @@ class SupabaseClient {
             requiresAuth: requiresAuth
         )
         
-        
+        // ✅ ENHANCED: Log full URL for debugging
+        print("📤 [SupabaseClient] \(method) \(request.url?.absoluteString ?? "unknown")")
         
         let (data, response) = try await URLSession.shared.data(for: request)
         
@@ -123,7 +120,24 @@ class SupabaseClient {
             throw APIError.invalidResponse
         }
         
+        print("📥 [SupabaseClient] Response: \(httpResponse.statusCode)")
         
+        // ✅ CRITICAL: Handle 3xx redirects
+        if (300...399).contains(httpResponse.statusCode) {
+            // Check if there's a Location header
+            if let location = httpResponse.allHeaderFields["Location"] as? String {
+                print("🔀 [SupabaseClient] Redirect to: \(location)")
+                print("⚠️ [SupabaseClient] PostgREST doesn't normally redirect - check your API URL")
+            }
+            
+            // Log response body to see what Supabase is returning
+            if let responseBody = String(data: data, encoding: .utf8) {
+                print("📦 [SupabaseClient] 3xx Response body:")
+                print(responseBody)
+            }
+            
+            throw APIError.badRequest("Unexpected redirect (300-399). Check API URL configuration.")
+        }
         
         // Handle errors
         switch httpResponse.statusCode {
@@ -149,6 +163,13 @@ class SupabaseClient {
             let decoder = JSONDecoder()
             decoder.keyDecodingStrategy = .convertFromSnakeCase
             decoder.dateDecodingStrategy = .iso8601
+            
+            // ✅ TEMPORARY DEBUG
+            if let jsonString = String(data: data, encoding: .utf8) {
+                print("📦 [API] Raw JSON:")
+                print(jsonString.prefix(500))  // First 500 chars only
+            }
+            
             return try decoder.decode(T.self, from: data)
         } catch {
             if Config.isDebug {

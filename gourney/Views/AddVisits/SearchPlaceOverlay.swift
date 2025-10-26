@@ -404,7 +404,7 @@ struct SearchPlaceConfirmSheet: View {
     
     @Environment(\.colorScheme) private var colorScheme
     @StateObject private var locationManager = LocationManager.shared
-    @State private var visits: [Visit] = []
+    @State private var visits: [EdgeFunctionVisit] = []
     @State private var isLoadingVisits = false
     
     var body: some View {
@@ -526,20 +526,8 @@ struct SearchPlaceConfirmSheet: View {
     private var photoSection: some View {
         let photoSize: CGFloat = 200
         
-        if !visits.isEmpty {
-            let allPhotos = visits.flatMap { $0.photoUrls }
-            if !allPhotos.isEmpty {
-                PhotoGridView(photos: Array(allPhotos.prefix(10)), photoSize: photoSize)
-                    .padding(.top, 30)
-                    .padding(.bottom, 20)
-            } else if let photoUrls = result.photoUrls, !photoUrls.isEmpty {
-                PhotoGridView(photos: Array(photoUrls.prefix(10)), photoSize: photoSize)
-                    .padding(.top, 30)
-                    .padding(.bottom, 20)
-            } else {
-                EmptyPhotoView(height: photoSize)
-            }
-        } else if let photoUrls = result.photoUrls, !photoUrls.isEmpty {
+        // EdgeFunctionVisit doesn't include photos, so just show place preview photos
+        if let photoUrls = result.photoUrls, !photoUrls.isEmpty {
             PhotoGridView(photos: Array(photoUrls.prefix(10)), photoSize: photoSize)
                 .padding(.top, 30)
                 .padding(.bottom, 20)
@@ -553,24 +541,41 @@ struct SearchPlaceConfirmSheet: View {
     private func loadVisits(placeId: String) async {
         isLoadingVisits = true
         
+        print("🔍 [SearchConfirm] Opening place - ID: \(placeId)")
+        
         do {
-            let response: [Visit] = try await SupabaseClient.shared.get(
-                path: "/rest/v1/visits",
-                queryItems: [
-                    URLQueryItem(name: "place_id", value: "eq.\(placeId)"),
-                    URLQueryItem(name: "select", value: "id,user_id,rating,comment,photo_urls,visited_at,created_at,updated_at,user:users!inner(id,handle,display_name,avatar_url)"),
-                    URLQueryItem(name: "order", value: "created_at.desc"),
-                    URLQueryItem(name: "limit", value: "10")
-                ],
-                requiresAuth: false
-            )
+            // ✅ Use Edge Function (same as PlaceInfoCard)
+            let url = "\(Config.supabaseURL)/functions/v1/places-get-visits/\(placeId)?limit=10&friends_only=false"
+            guard let requestURL = URL(string: url) else {
+                throw APIError.invalidResponse
+            }
+            
+            var request = URLRequest(url: requestURL)
+            request.httpMethod = "GET"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue(Config.supabaseAnonKey, forHTTPHeaderField: "apikey")
+            request.setValue("v1", forHTTPHeaderField: "X-API-Version")
+            
+            if let token = SupabaseClient.shared.getAuthToken() {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+            
+            let (data, urlResponse) = try await URLSession.shared.data(for: request)
+            
+            guard let httpResponse = urlResponse as? HTTPURLResponse,
+                  (200...299).contains(httpResponse.statusCode) else {
+                throw APIError.serverError
+            }
+            
+            let decoder = JSONDecoder()
+            let response = try decoder.decode(PlaceVisitsResponse.self, from: data)
             
             await MainActor.run {
-                visits = response
+                visits = response.visits
                 isLoadingVisits = false
             }
             
-            print("✅ [SearchConfirm] Loaded \(response.count) visits")
+            print("✅ [SearchConfirm] Loaded \(response.visits.count) visits")
             
         } catch {
             print("❌ [SearchConfirm] Failed to load visits: \(error)")
