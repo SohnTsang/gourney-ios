@@ -197,13 +197,5 @@ struct CreateVisitResponse: Codable {
     let createdNewPlace: Bool
     let pointsEarned: Int
     let moderationNote: String?
-    
-    enum CodingKeys: String, CodingKey {
-        case message
-        case visitId = "visit_id"
-        case placeId = "place_id"
-        case createdNewPlace = "created_new_place"
-        case pointsEarned = "points_earned"
-        case moderationNote = "moderation_note"
-    }
 }
+

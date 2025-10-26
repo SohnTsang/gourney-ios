@@ -2,7 +2,11 @@
 //  SearchPlaceOverlay.swift
 //  gourney
 //
-//  Production-grade design matching PlaceInfoCard
+//  ✅ CLEAN VERSION - No duplicates
+//  ✅ DB (50) + Apple (50) sorted by distance
+//  ✅ Pagination 20/page
+//  ✅ Original rating design (0 ★★★★★)
+//  ✅ Reduced overlay height
 //
 
 import SwiftUI
@@ -22,7 +26,6 @@ struct SearchPlaceOverlay: View {
     
     var body: some View {
         ZStack {
-            // Full screen overlay
             Color.black.opacity(0.4)
                 .ignoresSafeArea(.all)
                 .onTapGesture {
@@ -34,10 +37,9 @@ struct SearchPlaceOverlay: View {
             VStack(spacing: 0) {
                 searchBar
                 
-                if viewModel.isLoading {
+                if viewModel.isLoading && viewModel.displayedResults.isEmpty {
                     loadingView
-                } else if !viewModel.searchResults.isEmpty {
-                    // ✅ Suggestions list fills to overlay bottom
+                } else if !viewModel.displayedResults.isEmpty {
                     suggestionsList
                 } else if !viewModel.searchQuery.isEmpty && !viewModel.isLoading {
                     emptyStateView
@@ -47,10 +49,9 @@ struct SearchPlaceOverlay: View {
             }
             .background(colorScheme == .dark ? Color.black : .white)
             .cornerRadius(20)
-            .padding(.horizontal, 16)
-            .padding(.top, 60)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 100)
             .shadow(color: .black.opacity(0.2), radius: 20)
-            
             .sheet(isPresented: $showPlaceInfo) {
                 if let result = selectedResult {
                     SearchPlaceConfirmSheet(
@@ -61,7 +62,6 @@ struct SearchPlaceOverlay: View {
                         }
                     )
                     .presentationDetents([.large])
-                    .presentationDragIndicator(.visible)
                 }
             }
         }
@@ -100,7 +100,7 @@ struct SearchPlaceOverlay: View {
                 if !viewModel.searchQuery.isEmpty {
                     Button {
                         viewModel.searchQuery = ""
-                        viewModel.searchResults = []
+                        viewModel.clearResults()
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundColor(.secondary)
@@ -128,16 +128,30 @@ struct SearchPlaceOverlay: View {
     private var suggestionsList: some View {
         ScrollView(showsIndicators: false) {
             LazyVStack(spacing: 0) {
-                ForEach(viewModel.searchResults) { result in
+                ForEach(Array(viewModel.displayedResults.enumerated()), id: \.element.id) { index, result in
                     SearchResultRow(result: result)
                         .onTapGesture {
                             selectedResult = result
                             showPlaceInfo = true
                         }
+                        .onAppear {
+                            if index == viewModel.displayedResults.count - 1 {
+                                viewModel.loadMoreIfNeeded()
+                            }
+                        }
                     
-                    if result.id != viewModel.searchResults.last?.id {
+                    if result.id != viewModel.displayedResults.last?.id {
                         Divider()
                             .padding(.leading, 56)
+                    }
+                }
+                
+                if viewModel.isLoadingMore {
+                    HStack {
+                        Spacer()
+                        ProgressView()
+                            .padding(.vertical, 16)
+                        Spacer()
                     }
                 }
             }
@@ -181,12 +195,6 @@ struct SearchResultRow: View {
                         .foregroundColor(.secondary)
                         .lineLimit(1)
                 }
-                
-                if let categories = result.categories, !categories.isEmpty {
-                    Text(categories.prefix(2).joined(separator: " · "))
-                        .font(.system(size: 13))
-                        .foregroundColor(.secondary)
-                }
             }
             
             Spacer()
@@ -205,19 +213,49 @@ struct SearchResultRow: View {
 
 @MainActor
 class SearchPlaceViewModel: ObservableObject {
-    @Published var searchQuery = ""
-    @Published var searchResults: [PlaceSearchResult] = []
+    @Published var searchQuery: String = ""
+    @Published var displayedResults: [PlaceSearchResult] = []
     @Published var isLoading = false
-    @Published var error: String?
+    @Published var isLoadingMore = false
     
-    private let client = SupabaseClient.shared
+    private var allResults: [PlaceSearchResult] = []
+    private var currentPage = 0
+    private let pageSize = 20
+    
     private var searchTask: Task<Void, Never>?
+    private let client = SupabaseClient.shared
+    private let appleService = AppleMapKitService.shared
+    
+    func clearResults() {
+        allResults = []
+        displayedResults = []
+        currentPage = 0
+    }
+    
+    func loadMoreIfNeeded() {
+        guard !isLoadingMore else { return }
+        
+        let startIndex = displayedResults.count
+        let endIndex = min(startIndex + pageSize, allResults.count)
+        
+        guard startIndex < allResults.count else { return }
+        
+        isLoadingMore = true
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            self.displayedResults.append(contentsOf: self.allResults[startIndex..<endIndex])
+            self.currentPage += 1
+            self.isLoadingMore = false
+            
+            print("📄 [PAGINATION] Page \(self.currentPage): \(self.displayedResults.count)/\(self.allResults.count)")
+        }
+    }
     
     func performSearch(lat: Double, lng: Double) async {
         searchTask?.cancel()
         
         guard !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            searchResults = []
+            clearResults()
             return
         }
         
@@ -226,358 +264,378 @@ class SearchPlaceViewModel: ObservableObject {
             
             guard !Task.isCancelled else { return }
             
-            await MainActor.run { isLoading = true }
+            isLoading = true
             
-            print("🔍 [SEARCH] Starting search for: '\(searchQuery)'")
-            print("📍 [SEARCH] Location: lat=\(lat), lng=\(lng)")
-            print("⚙️ [SEARCH] Limit: 50 (expecting ~45 DB + 5 external)")
+            print("🔍 [SEARCH] Starting: '\(searchQuery)'")
             
+            let startTime = Date()
+            var combinedResults: [PlaceSearchResult] = []
+            var dbPlaceIds = Set<String>()
+            
+            // STEP 1: Database (up to 50)
             do {
-                let startTime = Date()
+                let requestBody: [String: Any] = [
+                    "query": searchQuery,
+                    "lat": lat,
+                    "lng": lng,
+                    "radius": 10000,
+                    "limit": 50
+                ]
                 
-                // ✅ Backend returns DB results first (sorted by distance), then Google/Apple (limit 5 external)
                 let response: SearchPlacesResponse = try await client.post(
                     path: "/functions/v1/places-search-external",
-                    body: [
-                        "query": searchQuery,
-                        "lat": lat,
-                        "lng": lng,
-                        "limit": 50  // ✅ 45 DB results + 5 external = 50 total
-                    ]
+                    body: requestBody
                 )
                 
-                let duration = Date().timeIntervalSince(startTime)
+                print("💾 [DB] \(response.results.count) results")
                 
-                guard !Task.isCancelled else { return }
-                
-                await MainActor.run {
-                    searchResults = response.results
-                    isLoading = false
-                    
-                    print("✅ [SEARCH] Success! Retrieved \(response.results.count) results in \(String(format: "%.2f", duration))s")
-                    print("📊 [SEARCH] Result breakdown:")
-                    
-                    let dbResults = response.results.filter { $0.existsInDb }
-                    let externalResults = response.results.filter { !$0.existsInDb }
-                    
-                    print("   - DB results: \(dbResults.count)")
-                    print("   - External API results: \(externalResults.count)")
-                    
-                    if externalResults.count > 5 {
-                        print("⚠️ [SEARCH] WARNING: Got \(externalResults.count) external results (expected max 5)")
-                        print("⚠️ [SEARCH] This may indicate excessive API usage!")
+                for result in response.results where result.existsInDb {
+                    // Add DB place ID
+                    if let dbId = result.dbPlaceId {
+                        dbPlaceIds.insert(dbId)
                     }
-                    
-                    print("📍 [SEARCH] First 5 results (with distance):")
-                    for (index, result) in response.results.prefix(5).enumerated() {
-                        let source = result.existsInDb ? "DB" : result.source.rawValue.uppercased()
-                        print("   \(index + 1). [\(source)] \(result.displayName) - \(result.formattedAddress ?? "No address")")
+                    // Add Apple place ID (to skip Apple API results for same place)
+                    if let appleId = result.applePlaceId {
+                        dbPlaceIds.insert(appleId)
                     }
-                    
-                    if response.results.count > 50 {
-                        print("⚠️ [SEARCH] WARNING: Received \(response.results.count) results (limit was 50)")
+                    // ✅ CRITICAL FIX: Also add Google place ID if present
+                    if let googleId = result.googlePlaceId {
+                        dbPlaceIds.insert(googleId)
                     }
                 }
+                
+                combinedResults.append(contentsOf: response.results)
+                
             } catch {
-                guard !Task.isCancelled else { return }
-                
-                print("❌ [SEARCH] Error: \(error.localizedDescription)")
-                
-                await MainActor.run {
-                    self.error = error.localizedDescription
-                    isLoading = false
-                }
+                print("❌ [DB] Error: \(error)")
             }
+            
+            guard !Task.isCancelled else { return }
+            
+            // STEP 2: Apple Maps (up to 50)
+            do {
+                let region = MKCoordinateRegion(
+                    center: CLLocationCoordinate2D(latitude: lat, longitude: lng),
+                    latitudinalMeters: 10000,
+                    longitudinalMeters: 10000
+                )
+                
+                let appleResults = try await appleService.searchPlaces(
+                    query: searchQuery,
+                    region: region,
+                    maxResults: 50
+                )
+                
+                print("🍎 [APPLE] \(appleResults.count) results")
+                
+                for appleResult in appleResults {
+                    // ✅ Check if this Apple place already exists in DB
+                    if dbPlaceIds.contains(appleResult.applePlaceId) {
+                        print("⏭️  [DEDUP] Skipping Apple result (exists in DB): \(appleResult.name)")
+                        continue
+                    }
+                    
+                    let searchResult = PlaceSearchResult(
+                        source: .apple,
+                        googlePlaceId: nil,
+                        applePlaceId: appleResult.applePlaceId,
+                        nameEn: appleResult.name,
+                        nameJa: appleResult.nameJa,
+                        nameZh: appleResult.nameZh,
+                        lat: appleResult.lat,
+                        lng: appleResult.lng,
+                        formattedAddress: appleResult.displayAddress,
+                        categories: appleResult.categories,
+                        photoUrls: nil,
+                        existsInDb: false,
+                        dbPlaceId: nil,
+                        appleFullData: ApplePlaceData(
+                            applePlaceId: appleResult.applePlaceId,
+                            name: appleResult.name,
+                            nameJa: appleResult.nameJa,
+                            nameZh: appleResult.nameZh,
+                            address: appleResult.displayAddress,
+                            city: appleResult.city,
+                            ward: appleResult.ward,
+                            lat: appleResult.lat,
+                            lng: appleResult.lng,
+                            phone: appleResult.phone,
+                            website: appleResult.website,
+                            categories: appleResult.categories
+                        )
+                    )
+                    
+                    combinedResults.append(searchResult)
+                }
+                
+            } catch {
+                print("❌ [APPLE] Error: \(error)")
+            }
+            
+            guard !Task.isCancelled else { return }
+            
+            // STEP 3: Sort by distance
+            let userLoc = CLLocation(latitude: lat, longitude: lng)
+            let sortedResults = combinedResults.sorted { r1, r2 in
+                let loc1 = CLLocation(latitude: r1.lat, longitude: r1.lng)
+                let loc2 = CLLocation(latitude: r2.lat, longitude: r2.lng)
+                return userLoc.distance(from: loc1) < userLoc.distance(from: loc2)
+            }
+            
+            let elapsed = Date().timeIntervalSince(startTime)
+            print("✅ [SEARCH] \(sortedResults.count) total in \(String(format: "%.2f", elapsed))s")
+            
+            allResults = sortedResults
+            currentPage = 0
+            displayedResults = Array(allResults.prefix(pageSize))
+            
+            print("📄 [PAGINATION] Page 1: \(displayedResults.count)/\(allResults.count)")
+            
+            isLoading = false
         }
     }
 }
 
-// ✅ SEARCH PLACE CONFIRM SHEET - EXACT PlaceInfoCard design with "Confirm Location" button
+// Add this to SearchPlaceOverlay.swift - Replace SearchPlaceConfirmSheet
+
 struct SearchPlaceConfirmSheet: View {
     let result: PlaceSearchResult
     let onConfirm: (PlaceSearchResult) -> Void
     
     @Environment(\.colorScheme) private var colorScheme
     @StateObject private var locationManager = LocationManager.shared
+    @State private var visits: [Visit] = []
+    @State private var isLoadingVisits = false
     
     var body: some View {
         GeometryReader { geometry in
             VStack(spacing: 0) {
-                // ✅ DRAG INDICATOR (like PlaceInfoCard)
+                // Drag indicator
                 RoundedRectangle(cornerRadius: 3)
                     .fill(Color.secondary.opacity(0.3))
                     .frame(width: 36, height: 5)
                     .padding(.top, 8)
                     .padding(.bottom, 12)
                 
-                ScrollView(showsIndicators: false) {
+                ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
-                        // ✅ TOP SPACING (more padding before photos)
-                        Spacer()
-                            .frame(height: 20)
-                        
-                        // ✅ PHOTOS (API photos for new places, visit photos for existing)
                         photoSection
                         
-                        // ✅ PLACE DETAILS (exact PlaceInfoCard layout)
-                        VStack(alignment: .leading, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 0) {
                             // Name
                             Text(result.displayName)
-                                .font(.system(size: 20, weight: .bold))
-                                .foregroundColor(colorScheme == .dark ? .white : .black)
+                                .font(.system(size: 22, weight: .bold))
+                                .foregroundColor(.primary)
+                                .padding(.bottom, 8)
                             
-                            // Provider attribution
-                            if result.source == .apple {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "applelogo")
-                                        .font(.system(size: 10))
-                                        .foregroundColor(.secondary)
-                                    Text("Powered by Apple")
-                                        .font(.system(size: 11, weight: .medium))
-                                        .foregroundColor(.secondary)
-                                }
-                                .padding(.top, -8)
-                            } else if result.source == .google {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "g.circle.fill")
-                                        .font(.system(size: 10))
-                                        .foregroundColor(.secondary)
-                                    Text("Powered by Google")
-                                        .font(.system(size: 11, weight: .medium))
-                                        .foregroundColor(.secondary)
-                                }
-                                .padding(.top, -8)
+                            // Rating
+                            ratingSection
+                                .padding(.bottom, 4)
+                            
+                            // Categories
+                            if let categories = result.categories, !categories.isEmpty {
+                                Text(categories.prefix(3).joined(separator: " · "))
+                                    .font(.system(size: 14))
+                                    .foregroundColor(.secondary)
+                                    .padding(.bottom, 16)
                             }
                             
-                            // ✅ RATING ROW (with stars - EXACT PlaceInfoCard design)
-                            HStack(spacing: 12) {
-                                // Rating with stars (0 if no rating)
-                                HStack(spacing: 4) {
-                                    Text("0")
-                                        .font(.system(size: 14, weight: .semibold))
-                                        .foregroundColor(.secondary)
-                                    
-                                    HStack(spacing: 2) {
-                                        ForEach(0..<5) { _ in
-                                            Image(systemName: "star")
-                                                .font(.system(size: 10))
-                                                .foregroundColor(.gray)
+                            // Visit status - ✅ NOW SHOWS REAL VISITS
+                            VisitStatusView(visitCount: visits.count, isLoading: isLoadingVisits)
+                                .padding(.bottom, 16)
+                            
+                            Divider()
+                                .padding(.vertical, 16)
+                            
+                            // Address
+                            if let address = result.formattedAddress, !address.isEmpty {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    HStack(spacing: 10) {
+                                        Circle()
+                                            .strokeBorder(Color(red: 1.0, green: 0.4, blue: 0.4), lineWidth: 2)
+                                            .frame(width: 32, height: 32)
+                                            .overlay {
+                                                Image(systemName: "mappin")
+                                                    .font(.system(size: 14, weight: .semibold))
+                                                    .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
+                                            }
+                                        
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text("Address")
+                                                .font(.system(size: 12, weight: .medium))
+                                                .foregroundColor(.secondary)
+                                            Text(address)
+                                                .font(.system(size: 15, weight: .semibold))
+                                                .foregroundColor(.primary)
                                         }
+                                        
+                                        Spacer()
                                     }
-                                }
-                                
-                                Spacer()
-                                
-                                // ✅ DISTANCE (no background - minimalist design)
-                                if let distance = locationManager.formattedDistance(from: result.coordinate) {
-                                    HStack(spacing: 4) {
-                                        Image(systemName: "location.fill")
-                                            .font(.system(size: 10))
-                                            .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
+                                    
+                                    // Distance
+                                    if let distance = calculateDistance() {
                                         Text(distance)
-                                            .font(.system(size: 13, weight: .semibold))
-                                            .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
+                                            .font(.system(size: 13))
+                                            .foregroundColor(.secondary)
+                                            .padding(.leading, 42)
                                     }
                                 }
                             }
                             
-                            // ✅ EXPANDED MODE DETAILS (always show in search)
-                            expandedDetailsSection
-                            
-                            // Address (always show)
-                            if let address = result.formattedAddress {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "mappin.circle.fill")
-                                        .font(.system(size: 12))
-                                        .foregroundColor(.secondary)
-                                    Text(address)
-                                        .font(.system(size: 13, weight: .regular))
-                                        .foregroundColor(.gray)
-                                }
+                            // Phone
+                            if let phone = result.appleFullData?.phone, !phone.isEmpty {
+                                Divider().padding(.vertical, 12)
+                                PhoneButton(phone: phone)
                             }
                             
-                            // ✅ CONFIRM LOCATION BUTTON (replaces "Add Visit" button)
-                            Button {
-                                onConfirm(result)
-                            } label: {
-                                Text("Confirm Location")
-                                    .font(.system(size: 15, weight: .semibold))
-                                    .foregroundColor(.white)
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 14)
-                                    .background(
-                                        LinearGradient(
-                                            colors: [Color(red: 1.0, green: 0.4, blue: 0.4), Color(red: 0.95, green: 0.3, blue: 0.35)],
-                                            startPoint: .leading,
-                                            endPoint: .trailing
-                                        )
-                                    )
-                                    .cornerRadius(12)
+                            // Website
+                            if let website = result.appleFullData?.website, !website.isEmpty {
+                                Divider().padding(.vertical, 12)
+                                WebsiteButton(website: website)
                             }
-                            .padding(.top, 8)
+                            
+                            // Directions
+                            Divider().padding(.vertical, 12)
+                            DirectionsButton(
+                                placeName: result.displayName,
+                                address: result.formattedAddress ?? ""
+                            )
                         }
                         .padding(.horizontal, 20)
                         
-                        Spacer()
-                            .frame(height: max(20, geometry.safeAreaInsets.bottom + 20))
+                        Spacer().frame(height: 100)
                     }
+                }
+                
+                VStack(spacing: 0) {
+                    Button {
+                        onConfirm(result)
+                    } label: {
+                        Text("Confirm Location")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                            .background(
+                                LinearGradient(
+                                    colors: [Color(red: 1.0, green: 0.4, blue: 0.4), Color(red: 0.95, green: 0.3, blue: 0.35)],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .cornerRadius(12)
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 12)
+                    .padding(.bottom, max(12, geometry.safeAreaInsets.bottom + 12))
+                    .background(colorScheme == .dark ? Color(.systemBackground) : Color.white)
                 }
             }
         }
         .background(colorScheme == .dark ? Color(.systemBackground) : Color.white)
-    }
-    
-    // ✅ PHOTO SECTION (EXACT PlaceInfoCard design)
-    @ViewBuilder
-    private var photoSection: some View {
-        let photoSize: CGFloat = 160
-        
-        if let photoUrls = result.photoUrls, !photoUrls.isEmpty {
-            PhotoGridView(photos: Array(photoUrls.prefix(10)), photoSize: photoSize)
-                .padding(.bottom, 20)
-        } else {
-            VStack(spacing: 8) {
-                Image(systemName: "photo.on.rectangle.angled")
-                    .font(.system(size: 40))
-                    .foregroundColor(.secondary.opacity(0.5))
-                Text("No photos yet")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundColor(.secondary)
+        .task {
+            // ✅ Load visits if place exists in DB
+            if result.existsInDb, let placeId = result.dbPlaceId {
+                await loadVisits(placeId: placeId)
             }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 40)
         }
     }
     
-    // ✅ EXPANDED DETAILS SECTION (Instagram-level exquisite design)
+    // MARK: - Components
+    
     @ViewBuilder
-    private var expandedDetailsSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Divider()
-                .padding(.vertical, 8)
+    private var ratingSection: some View {
+        HStack(spacing: 4) {
+            Text(ratingText)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(.primary)
             
-            // Status badge
-            HStack(spacing: 8) {
-                Image(systemName: result.existsInDb ? "checkmark.circle.fill" : "star.circle.fill")
-                    .font(.system(size: 14))
-                    .foregroundColor(result.existsInDb ? .blue : Color(red: 1.0, green: 0.4, blue: 0.4))
-                Text(result.existsInDb ? "In your network" : "New place - be the first!")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(.primary)
-            }
-            
-            // ✅ PRICE LEVEL ($ symbols)
-            if let appleData = result.appleFullData {
-                // Check if GooglePlaceData has price in the future
-                // For now showing placeholder
-                HStack(spacing: 6) {
-                    Image(systemName: "yensign.circle.fill")
-                        .font(.system(size: 16))
-                        .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
-                    Text("$$")  // TODO: Get from API when available
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundColor(.primary)
+            HStack(spacing: 2) {
+                ForEach(0..<5) { index in
+                    Image(systemName: "star")
+                        .font(.system(size: 10))
+                        .foregroundColor(.gray)
                 }
             }
+        }
+    }
+    
+    private var ratingText: String {
+        return "0"
+    }
+    
+    @ViewBuilder
+    private var photoSection: some View {
+        let photoSize: CGFloat = 200
+        
+        if !visits.isEmpty {
+            let allPhotos = visits.flatMap { $0.photoUrls }
+            if !allPhotos.isEmpty {
+                PhotoGridView(photos: Array(allPhotos.prefix(10)), photoSize: photoSize)
+                    .padding(.top, 30)
+                    .padding(.bottom, 20)
+            } else if let photoUrls = result.photoUrls, !photoUrls.isEmpty {
+                PhotoGridView(photos: Array(photoUrls.prefix(10)), photoSize: photoSize)
+                    .padding(.top, 30)
+                    .padding(.bottom, 20)
+            } else {
+                EmptyPhotoView(height: photoSize)
+            }
+        } else if let photoUrls = result.photoUrls, !photoUrls.isEmpty {
+            PhotoGridView(photos: Array(photoUrls.prefix(10)), photoSize: photoSize)
+                .padding(.top, 30)
+                .padding(.bottom, 20)
+        } else {
+            EmptyPhotoView(height: photoSize)
+        }
+    }
+    
+    // MARK: - Data Loading
+    
+    private func loadVisits(placeId: String) async {
+        isLoadingVisits = true
+        
+        do {
+            let response: [Visit] = try await SupabaseClient.shared.get(
+                path: "/rest/v1/visits",
+                queryItems: [
+                    URLQueryItem(name: "place_id", value: "eq.\(placeId)"),
+                    URLQueryItem(name: "select", value: "id,user_id,rating,comment,photo_urls,visited_at,created_at,updated_at,user:users!inner(id,handle,display_name,avatar_url)"),
+                    URLQueryItem(name: "order", value: "created_at.desc"),
+                    URLQueryItem(name: "limit", value: "10")
+                ],
+                requiresAuth: false
+            )
             
-            // ✅ PHONE NUMBER
-            if let appleData = result.appleFullData, let phone = appleData.phone {
-                Button(action: {
-                    if let url = URL(string: "tel:\(phone.replacingOccurrences(of: " ", with: ""))") {
-                        UIApplication.shared.open(url)
-                    }
-                }) {
-                    HStack(spacing: 10) {
-                        Circle()
-                            .fill(Color(red: 0.2, green: 0.78, blue: 0.35))
-                            .frame(width: 32, height: 32)
-                            .overlay {
-                                Image(systemName: "phone.fill")
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .foregroundColor(.white)
-                            }
-                        
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Call")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundColor(.secondary)
-                            Text(phone)
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundColor(.primary)
-                        }
-                        
-                        Spacer()
-                        
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(.secondary)
-                    }
-                    .padding(.vertical, 8)
-                }
+            await MainActor.run {
+                visits = response
+                isLoadingVisits = false
             }
             
-            // ✅ WEBSITE
-            if let appleData = result.appleFullData, let website = appleData.website {
-                Button(action: {
-                    if let url = URL(string: website) {
-                        UIApplication.shared.open(url)
-                    }
-                }) {
-                    HStack(spacing: 10) {
-                        Circle()
-                            .fill(Color(red: 0.0, green: 0.48, blue: 1.0))
-                            .frame(width: 32, height: 32)
-                            .overlay {
-                                Image(systemName: "safari.fill")
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .foregroundColor(.white)
-                            }
-                        
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Website")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundColor(.secondary)
-                            Text(website.replacingOccurrences(of: "https://", with: "").replacingOccurrences(of: "http://", with: ""))
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundColor(.primary)
-                                .lineLimit(1)
-                        }
-                        
-                        Spacer()
-                        
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(.secondary)
-                    }
-                    .padding(.vertical, 8)
-                }
-            }
+            print("✅ [SearchConfirm] Loaded \(response.count) visits")
             
-            // ✅ OPENING HOURS (if available - Google only for now)
-            // TODO: Add when GooglePlaceData includes opening_hours in response
-            
-            // Categories
-            if let categories = result.categories, !categories.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Categories")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(.secondary)
-                    
-                    FlowLayout(spacing: 8) {
-                        ForEach(categories.prefix(5), id: \.self) { category in
-                            Text(category)
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundColor(.primary)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 4)
-                                .background(Color.gray.opacity(colorScheme == .dark ? 0.3 : 0.15))
-                                .cornerRadius(6)
-                        }
-                    }
-                }
+        } catch {
+            print("❌ [SearchConfirm] Failed to load visits: \(error)")
+            await MainActor.run {
+                visits = []
+                isLoadingVisits = false
             }
+        }
+    }
+    
+    // MARK: - Helpers
+    
+    private func calculateDistance() -> String? {
+        guard let userLocation = locationManager.userLocation else { return nil }
+        
+        let placeLocation = CLLocation(latitude: result.lat, longitude: result.lng)
+        let userCLLocation = CLLocation(latitude: userLocation.latitude, longitude: userLocation.longitude)
+        let distance = userCLLocation.distance(from: placeLocation)
+        
+        if distance < 1000 {
+            return String(format: "%.0f m away", distance)
+        } else {
+            return String(format: "%.1f km away", distance / 1000)
         }
     }
 }
-
-// PhotoGridView, PlaceholderPhotoView, and FlowLayout are already defined in PlaceInfoCard.swift

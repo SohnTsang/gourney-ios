@@ -13,12 +13,12 @@
     "%lld" : {
 
     },
-    "%lld friend%@ visited" : {
+    "%lld visit%@" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "%1$lld friend%2$@ visited"
+            "value" : "%1$lld visit%2$@"
           }
         }
       }
@@ -36,19 +36,13 @@
     "%lld%%" : {
 
     },
-    "$$" : {
-
-    },
-    "0" : {
-
-    },
-    "Add" : {
-
-    },
-    "Add to List" : {
+    "Add Photos" : {
 
     },
     "Add Visit" : {
+
+    },
+    "Address" : {
 
     },
     "All" : {
@@ -810,13 +804,13 @@
     "Back to Sign Up" : {
 
     },
+    "Be the first to visit!" : {
+
+    },
     "Call" : {
 
     },
     "Cancel" : {
-
-    },
-    "Categories" : {
 
     },
     "Check Your Email!" : {
@@ -828,10 +822,10 @@
     "Choose how you want to be known" : {
 
     },
-    "Click the link in the email to verify your account. Once verified, you'll complete your profile in the app." : {
+    "Clear All" : {
 
     },
-    "Closed" : {
+    "Click the link in the email to verify your account. Once verified, you'll complete your profile in the app." : {
 
     },
     "Coming in Day 5" : {
@@ -1099,9 +1093,6 @@
 
     },
     "Create Account" : {
-
-    },
-    "Details" : {
 
     },
     "Directions" : {
@@ -1499,22 +1490,16 @@
     "Gourney" : {
 
     },
-    "Hours" : {
-
-    },
-    "How was it?" : {
-
-    },
-    "In your network" : {
-
-    },
     "Join Gourney today" : {
 
     },
     "Lists" : {
 
     },
-    "Loading..." : {
+    "Loading visits..." : {
+
+    },
+    "Location" : {
 
     },
     "Location Permission Required" : {
@@ -1619,19 +1604,16 @@
     "Logged in as:" : {
 
     },
-    "New place - be the first!" : {
-
-    },
-    "No photos yet" : {
-
-    },
     "No places found" : {
+
+    },
+    "No visit photos yet" : {
 
     },
     "OK" : {
 
     },
-    "Open" : {
+    "Open in Maps" : {
 
     },
     "or" : {
@@ -1835,16 +1817,16 @@
     "Posted!" : {
 
     },
-    "Posting..." : {
-
-    },
-    "Powered by Apple" : {
-
-    },
-    "Powered by Google" : {
+    "Posting your visit..." : {
 
     },
     "Profile" : {
+
+    },
+    "Rating" : {
+
+    },
+    "Required" : {
 
     },
     "Search for a place" : {
@@ -1865,16 +1847,10 @@
     "Settings" : {
 
     },
-    "Share" : {
-
-    },
     "Share your experience..." : {
 
     },
     "Share your thoughts" : {
-
-    },
-    "Show Less" : {
 
     },
     "Sign In" : {
@@ -2021,6 +1997,9 @@
     "Try searching or adjust your filters" : {
 
     },
+    "Up to %lld photos" : {
+
+    },
     "Upload Photos" : {
 
     },
@@ -2033,9 +2012,6 @@
     "Uploading photos..." : {
 
     },
-    "Uploading..." : {
-
-    },
     "username" : {
 
     },
@@ -2045,10 +2021,10 @@
     "Website" : {
 
     },
-    "Where did you visit?" : {
+    "Who can see this?" : {
 
     },
-    "Who can see this?" : {
+    "Your visit has been shared!" : {
 
     }
   },

@@ -2,6 +2,7 @@
 //  AddVisitView.swift
 //  gourney
 //
+//  ✅ FIXED: No upload progress, no upload overlay, bigger photos, proper blocking
 
 import SwiftUI
 import PhotosUI
@@ -23,14 +24,13 @@ class AddVisitViewModel: ObservableObject {
     @Published var rating: Int = 0
     @Published var comment: String = ""
     @Published var visibility: VisitVisibility = .public
-    @Published var isUploading = false
     @Published var isSubmitting = false
-    @Published var uploadProgress: Double = 0
     @Published var errorMessage: String?
     @Published var showSuccess = false
     @Published var selectedPlaceResult: PlaceSearchResult?
     @Published var selectedPhotoIndex: Int?
     @Published var showSearchOverlay = false
+    @Published var showErrorAlert = false
     
     let maxPhotos = 5
     let maxCommentLength = 1000
@@ -52,7 +52,7 @@ class AddVisitViewModel: ObservableObject {
         guard !selectedPhotos.isEmpty else { return }
         var newImages: [UIImage] = []
         
-        for item in selectedPhotos {
+        for (index, item) in selectedPhotos.enumerated() {
             if let data = try? await item.loadTransferable(type: Data.self),
                let image = UIImage(data: data) {
                 let resized = resizeImageForPreview(image)
@@ -83,39 +83,52 @@ class AddVisitViewModel: ObservableObject {
     
     func uploadPhotos() async throws {
         guard !loadedImages.isEmpty else { return }
-        guard let user = AuthManager.shared.currentUser else { throw APIError.unauthorized }
+        guard let user = AuthManager.shared.currentUser else {
+            throw APIError.unauthorized
+        }
         
-        isUploading = true
-        uploadProgress = 0
-        uploadedPhotoURLs.removeAll()
-        
+        // ✅ NO PROGRESS LOGGING - Silent upload
         let urls = try await PhotoUploadService.shared.uploadPhotos(
             loadedImages,
             userId: user.id,
-            progressHandler: { index, progress in
-                Task { @MainActor in
-                    self.uploadProgress = (Double(index) + progress) / Double(self.loadedImages.count)
-                }
-            }
+            progressHandler: { _, _ in }  // ✅ EMPTY - No progress updates
         )
         
         await MainActor.run {
             self.uploadedPhotoURLs = urls
-            self.isUploading = false
         }
     }
     
     func submitVisit() async {
         guard isValid else { return }
+        
+        // ✅ CLIENT VALIDATION - Before any network activity
+        if loadedImages.count > maxPhotos {
+            await MainActor.run {
+                errorMessage = "Maximum \(maxPhotos) photos allowed"
+                showErrorAlert = true
+            }
+            return
+        }
+        
+        guard let placeResult = selectedPlaceResult else {
+            await MainActor.run {
+                errorMessage = "Please select a place"
+                showErrorAlert = true
+            }
+            return
+        }
+        
+        print("🚀 [AddVisit] Submitting visit for: \(placeResult.displayName)")
+        
         isSubmitting = true
         errorMessage = nil
         
         do {
+            // Upload photos silently
             if !loadedImages.isEmpty && uploadedPhotoURLs.isEmpty {
                 try await uploadPhotos()
             }
-            
-            guard let placeResult = selectedPlaceResult else { return }
             
             var requestBody: [String: Any] = [
                 "rating": rating,
@@ -126,6 +139,34 @@ class AddVisitViewModel: ObservableObject {
             
             if let dbPlaceId = placeResult.dbPlaceId {
                 requestBody["place_id"] = dbPlaceId
+            } else if placeResult.source == .apple, let appleId = placeResult.applePlaceId {
+                // ✅ FIXED: Match RPC parameter order exactly
+                var applePlaceData: [String: Any] = [
+                    "apple_place_id": appleId,
+                    "name": placeResult.displayName,
+                    "lat": placeResult.lat,
+                    "lng": placeResult.lng,
+                    "city": placeResult.appleFullData?.city ?? "",  // ✅ REQUIRED
+                ]
+                
+                // Optional fields
+                if let address = placeResult.formattedAddress, !address.isEmpty {
+                    applePlaceData["address"] = address
+                }
+                if let ward = placeResult.appleFullData?.ward {
+                    applePlaceData["ward"] = ward
+                }
+                if let phone = placeResult.appleFullData?.phone {
+                    applePlaceData["phone"] = phone
+                }
+                if let website = placeResult.appleFullData?.website {
+                    applePlaceData["website"] = website
+                }
+                if let categories = placeResult.appleFullData?.categories, !categories.isEmpty {
+                    applePlaceData["categories"] = categories
+                }
+                
+                requestBody["apple_place_data"] = applePlaceData
             } else if placeResult.source == .google, let googleId = placeResult.googlePlaceId {
                 requestBody["google_place_data"] = [
                     "google_place_id": googleId,
@@ -135,41 +176,67 @@ class AddVisitViewModel: ObservableObject {
                     "lng": placeResult.lng,
                     "categories": placeResult.categories ?? []
                 ]
-            } else if placeResult.source == .apple, let appleId = placeResult.applePlaceId {
-                requestBody["apple_place_data"] = [
-                    "apple_place_id": appleId,
-                    "name": placeResult.displayName,
-                    "address": placeResult.formattedAddress ?? "",
-                    "lat": placeResult.lat,
-                    "lng": placeResult.lng
-                ]
             }
             
-            let _: CreateVisitResponse = try await client.post(
+            let response: CreateVisitResponse = try await client.post(
                 path: "/functions/v1/visits-create-with-place",
                 body: requestBody
             )
+            
+            print("✅ [AddVisit] Success! Visit ID: \(response.visitId)")
             
             await MainActor.run {
                 isSubmitting = false
                 showSuccess = true
                 loadedImages = []
                 selectedPhotos = []
+                uploadedPhotoURLs = []
+            }
+        } catch let error as APIError {
+            let userMessage: String
+            switch error {
+            case .unauthorized:
+                userMessage = NSLocalizedString("error.unauthorized", comment: "")
+            case .badRequest(let message):
+                userMessage = message
+            case .rateLimitExceeded:
+                userMessage = NSLocalizedString("error.rate_limit", comment: "")
+            case .serverError:
+                userMessage = "Server error. Please try again or contact support."
+            case .invalidResponse:
+                userMessage = NSLocalizedString("error.network", comment: "")
+            case .decodingFailed:
+                userMessage = NSLocalizedString("error.decode", comment: "")
+            case .unknown:
+                userMessage = NSLocalizedString("error.unknown", comment: "")
+            }
+            
+            print("❌ [AddVisit] Error: \(error)")
+            
+            await MainActor.run {
+                isSubmitting = false
+                errorMessage = userMessage
+                showErrorAlert = true
             }
         } catch {
+            print("❌ [AddVisit] Unexpected error: \(error)")
+            
             await MainActor.run {
                 isSubmitting = false
                 errorMessage = error.localizedDescription
+                showErrorAlert = true
             }
         }
     }
 }
 
 struct AddVisitView: View {
+    var prefilledPlace: PlaceSearchResult? = nil  // ✅ ADD THIS LINE
+
     @StateObject private var viewModel = AddVisitViewModel()
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
-    
+
     var body: some View {
         ZStack {
             (colorScheme == .dark ? Color.black : Color(white: 0.97))
@@ -190,8 +257,11 @@ struct AddVisitView: View {
                     .padding(.top, 16)
                 }
             }
+            // ✅ BLOCK EVERYTHING when submitting OR search overlay is up
+            .disabled(viewModel.isSubmitting || viewModel.showSearchOverlay)
             
-            if viewModel.isUploading || viewModel.isSubmitting {
+            // ✅ SIMPLE LOADING - No progress, just spinner
+            if viewModel.isSubmitting {
                 loadingOverlay
             }
             
@@ -210,36 +280,32 @@ struct AddVisitView: View {
         }
         .alert("Posted!", isPresented: $viewModel.showSuccess) {
             Button("OK") { dismiss() }
-        }
-        .alert("Error", isPresented: .constant(viewModel.errorMessage != nil)) {
-            Button("OK") { viewModel.errorMessage = nil }
         } message: {
-            if let error = viewModel.errorMessage {
-                Text(error)
+            Text("Your visit has been shared!")
+        }
+        .alert("Error", isPresented: $viewModel.showErrorAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(viewModel.errorMessage ?? "Something went wrong")
+        }
+        .onAppear {
+            // ✅ ADD THIS BLOCK
+            if let prefilled = prefilledPlace {
+                viewModel.selectedPlaceResult = prefilled
+                print("✅ [AddVisit] Pre-filled place: \(prefilled.displayName)")
             }
         }
-        .onDisappear {
-            viewModel.loadedImages = []
-            viewModel.selectedPhotos = []
+        .onChange(of: viewModel.selectedPhotos) { _, _ in
+            Task { await viewModel.loadPhotos() }
         }
     }
-    
     private var navigationBar: some View {
-        HStack {
-            Button { dismiss() } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundColor(Design.accent)
-                    .frame(width: 32, height: 32)
-                    .background(Design.accent.opacity(0.1))
-                    .clipShape(Circle())
-            }
+        HStack(spacing: 16) {
             
             Spacer()
             
             Text("Add Visit")
-                .font(.system(size: 17, weight: .semibold))
-                .lineLimit(1)
+                .font(.system(size: 18, weight: .bold))
             
             Spacer()
             
@@ -247,17 +313,26 @@ struct AddVisitView: View {
                 Task { await viewModel.submitVisit() }
             } label: {
                 Text("Post")
-                    .font(.system(size: 15, weight: .bold))
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundColor(.white)
-                    .frame(width: 60, height: 32)
-                    .background(viewModel.isValid ? Design.accentGradient : LinearGradient(colors: [Color.gray.opacity(0.5)], startPoint: .top, endPoint: .bottom))
-                    .clipShape(Capsule())
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 8)
+                    .background(
+                        Group {
+                            if viewModel.isValid {
+                                Design.accentGradient
+                            } else {
+                                Color.gray.opacity(0.5)
+                            }
+                        }
+                    )
+                    .cornerRadius(20)
             }
-            .disabled(!viewModel.isValid)
+            .disabled(!viewModel.isValid || viewModel.isSubmitting)
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(colorScheme == .dark ? Color.black : .white)
+        .padding(.vertical, 12)
+        .background(colorScheme == .dark ? Color.black : Color.white)
     }
     
     private var photosSection: some View {
@@ -265,84 +340,106 @@ struct AddVisitView: View {
             HStack {
                 Text("Photos")
                     .font(.system(size: 15, weight: .semibold))
-                Spacer()
+                
                 Text("\(viewModel.loadedImages.count)/\(viewModel.maxPhotos)")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundColor(.secondary)
+                
+                Spacer()
+                
+                if !viewModel.loadedImages.isEmpty {
+                    Button {
+                        viewModel.selectedPhotos = []
+                        viewModel.loadedImages = []
+                    } label: {
+                        Text("Clear All")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(Design.accent)
+                    }
+                }
             }
             .padding(.horizontal, 16)
             
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 12) {
-                    if viewModel.loadedImages.count < viewModel.maxPhotos {
-                        PhotosPicker(
-                            selection: $viewModel.selectedPhotos,
-                            maxSelectionCount: viewModel.maxPhotos - viewModel.loadedImages.count,
-                            matching: .images
-                        ) {
-                            RoundedRectangle(cornerRadius: 16)
-                                .fill(Design.accent.opacity(0.08))
-                                .frame(width: 160, height: 200)
-                                .overlay {
-                                    VStack(spacing: 8) {
-                                        Circle()
-                                            .fill(Design.accentGradient)
-                                            .frame(width: 44, height: 44)
-                                            .overlay {
-                                                Image(systemName: "plus")
-                                                    .font(.system(size: 20, weight: .semibold))
-                                                    .foregroundColor(.white)
-                                            }
-                                        Text("Add")
-                                            .font(.system(size: 13, weight: .semibold))
-                                            .foregroundColor(Design.accent)
-                                    }
-                                }
-                        }
-                        .onChange(of: viewModel.selectedPhotos) { _, _ in
-                            Task { await viewModel.loadPhotos() }
-                        }
+            if viewModel.loadedImages.isEmpty {
+                PhotosPicker(
+                    selection: $viewModel.selectedPhotos,
+                    maxSelectionCount: viewModel.maxPhotos,
+                    matching: .images
+                ) {
+                    VStack(spacing: 12) {
+                        Image(systemName: "photo.on.rectangle.angled")
+                            .font(.system(size: 40))
+                            .foregroundColor(Design.accent.opacity(0.6))
+                        
+                        Text("Add Photos")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(.primary)
+                        
+                        Text("Up to \(viewModel.maxPhotos) photos")
+                            .font(.system(size: 13))
+                            .foregroundColor(.secondary)
                     }
-                    
-                    ForEach(Array(viewModel.loadedImages.enumerated()), id: \.offset) { index, image in
-                        ZStack(alignment: .topTrailing) {
-                            Button {
-                                viewModel.selectedPhotoIndex = index
-                            } label: {
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 180)  // ✅ BIGGER
+                    .background(colorScheme == .dark ? Color(white: 0.15) : Color.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+                .padding(.horizontal, 16)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        ForEach(Array(viewModel.loadedImages.enumerated()), id: \.offset) { index, image in
+                            ZStack(alignment: .topTrailing) {
                                 Image(uiImage: image)
                                     .resizable()
                                     .scaledToFill()
-                                    .frame(width: 160, height: 200)
-                                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                            }
-                            
-                            Button {
-                                withAnimation(.spring(response: 0.3)) {
+                                    .frame(width: 160, height: 213)  // ✅ 3:4 ratio (iPhone photos)
+                                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                                    .onTapGesture {
+                                        viewModel.selectedPhotoIndex = index
+                                    }
+                                
+                                Button {
                                     viewModel.loadedImages.remove(at: index)
-                                    viewModel.selectedPhotos.remove(at: index)
+                                    if index < viewModel.selectedPhotos.count {
+                                        viewModel.selectedPhotos.remove(at: index)
+                                    }
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.system(size: 24))  // ✅ BIGGER
+                                        .foregroundColor(.white)
+                                        .background(Circle().fill(Color.black.opacity(0.6)))
                                 }
-                            } label: {
-                                Circle()
-                                    .fill(.ultraThinMaterial)
-                                    .frame(width: 28, height: 28)
+                                .padding(8)
+                            }
+                        }
+                        
+                        if viewModel.loadedImages.count < viewModel.maxPhotos {
+                            PhotosPicker(
+                                selection: $viewModel.selectedPhotos,
+                                maxSelectionCount: viewModel.maxPhotos,
+                                matching: .images
+                            ) {
+                                RoundedRectangle(cornerRadius: 12)
+                                    .strokeBorder(Design.accent.opacity(0.5), style: StrokeStyle(lineWidth: 2, dash: [8, 4]))
+                                    .frame(width: 160, height: 213)  // ✅ BIGGER
                                     .overlay {
-                                        Image(systemName: "xmark")
-                                            .font(.system(size: 11, weight: .bold))
-                                            .foregroundColor(.white)
+                                        Image(systemName: "plus")
+                                            .font(.system(size: 32, weight: .medium))  // ✅ BIGGER
+                                            .foregroundColor(Design.accent.opacity(0.7))
                                     }
                             }
-                            .padding(8)
                         }
                     }
+                    .padding(.horizontal, 16)
                 }
-                .padding(.horizontal, 16)
             }
         }
     }
     
     private var placeSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Where did you visit?")
+            Text("Location")
                 .font(.system(size: 15, weight: .semibold))
                 .padding(.horizontal, 16)
             
@@ -350,57 +447,51 @@ struct AddVisitView: View {
                 viewModel.showSearchOverlay = true
             } label: {
                 HStack(spacing: 12) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundColor(Design.accent)
-                    
-                    if viewModel.hasPlace {
-                        HStack {
-                            Text(viewModel.displayPlaceName)
-                                .font(.system(size: 15))
-                                .foregroundColor(.primary)
-                            Spacer()
-                            Button {
-                                withAnimation {
-                                    viewModel.selectedPlaceResult = nil
-                                }
-                            } label: {
-                                Image(systemName: "xmark.circle.fill")
-                                    .foregroundColor(.secondary)
-                            }
+                    Circle()
+                        .fill(viewModel.hasPlace ? Design.accent : Color.gray.opacity(0.3))
+                        .frame(width: 40, height: 40)
+                        .overlay {
+                            Image(systemName: "mappin.and.ellipse")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.white)
                         }
-                    } else {
-                        Text("Search for a place")
-                            .font(.system(size: 15))
-                            .foregroundColor(.secondary)
-                        Spacer()
+                    
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(viewModel.hasPlace ? viewModel.displayPlaceName : "Select a place")
+                            .font(.system(size: 15, weight: viewModel.hasPlace ? .semibold : .regular))
+                            .foregroundColor(viewModel.hasPlace ? .primary : .secondary)
+                        
+                        if !viewModel.hasPlace {
+                            Text("Required")
+                                .font(.system(size: 13))
+                                .foregroundColor(.secondary)
+                        }
                     }
+                    
+                    Spacer()
+                    
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.secondary)
                 }
                 .padding(14)
-                .background(colorScheme == .dark ? Color(white: 0.15) : Color.white)
+                .background(colorScheme == .dark ? Color(white: 0.12) : Color.white)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12)
-                        .strokeBorder(
-                            viewModel.hasPlace ? Design.accent.opacity(0.5) : Color.clear,
-                            lineWidth: 1.5
-                        )
-                )
             }
             .padding(.horizontal, 16)
         }
     }
     
     private var ratingSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("How was it?")
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Rating")
                 .font(.system(size: 15, weight: .semibold))
                 .padding(.horizontal, 16)
             
-            HStack(spacing: 14) {
+            HStack(spacing: 16) {
                 ForEach(1...5, id: \.self) { star in
                     Button {
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+                        withAnimation(.spring(response: 0.3)) {
                             viewModel.rating = star
                         }
                     } label: {
@@ -550,37 +641,25 @@ struct AddVisitView: View {
         }
     }
     
+    // ✅ SIMPLE LOADING - Just a spinner, no progress
     private var loadingOverlay: some View {
         ZStack {
             Color.black.opacity(0.5).ignoresSafeArea()
             
-            VStack(spacing: 16) {
-                ZStack {
-                    Circle()
-                        .stroke(Color.white.opacity(0.2), lineWidth: 8)
-                        .frame(width: 70, height: 70)
-                    
-                    Circle()
-                        .trim(from: 0, to: viewModel.isUploading ? viewModel.uploadProgress : 0.7)
-                        .stroke(Design.accentGradient, style: StrokeStyle(lineWidth: 8, lineCap: .round))
-                        .frame(width: 70, height: 70)
-                        .rotationEffect(.degrees(-90))
-                }
+            VStack(spacing: 20) {
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    .scaleEffect(1.5)
                 
-                VStack(spacing: 6) {
-                    Text(viewModel.isUploading ? "Uploading..." : "Posting...")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(.white)
-                    
-                    if viewModel.isUploading {
-                        Text("\(Int(viewModel.uploadProgress * 100))%")
-                            .font(.system(size: 14))
-                            .foregroundColor(.white.opacity(0.7))
-                    }
-                }
+                Text("Posting your visit...")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundColor(.white)
             }
-            .padding(32)
-            .background(RoundedRectangle(cornerRadius: 20).fill(.ultraThinMaterial))
+            .padding(40)
+            .background(
+                RoundedRectangle(cornerRadius: 20)
+                    .fill(.ultraThinMaterial)
+            )
         }
     }
 }
