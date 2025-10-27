@@ -25,44 +25,48 @@ struct SearchPlaceOverlay: View {
     @State private var showPlaceInfo = false
     
     var body: some View {
-        ZStack {
-            Color.black.opacity(0.4)
-                .ignoresSafeArea(.all)
-                .onTapGesture {
-                    if !showPlaceInfo {
-                        isPresented = false
-                    }
-                }
+        VStack(spacing: 0) {
+            // Search Bar (Top)
+            searchBar
+                .padding(.horizontal, 20)
+                .padding(.top, 16)
+                .padding(.bottom, 12)
+                .background(colorScheme == .dark ? Color(.systemBackground) : Color.white)
+                .shadow(color: .black.opacity(0.05), radius: 2, y: 2)
             
-            VStack(spacing: 0) {
-                searchBar
-                
-                if viewModel.isLoading && viewModel.displayedResults.isEmpty {
-                    loadingView
-                } else if !viewModel.displayedResults.isEmpty {
-                    suggestionsList
-                } else if !viewModel.searchQuery.isEmpty && !viewModel.isLoading {
-                    emptyStateView
+            // Results
+            if viewModel.isLoading && viewModel.displayedResults.isEmpty {
+                loadingView
+            } else if !viewModel.displayedResults.isEmpty {
+                suggestionsList
+            } else if !viewModel.searchQuery.isEmpty && !viewModel.isLoading {
+                emptyStateView
+            } else {
+                // Placeholder when search is empty
+                Spacer()
+                VStack(spacing: 16) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 50))
+                        .foregroundColor(.secondary.opacity(0.5))
+                    Text("Search for places")
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundColor(.secondary)
                 }
-                
                 Spacer()
             }
-            .background(colorScheme == .dark ? Color.black : .white)
-            .cornerRadius(20)
-            .padding(.horizontal, 20)
-            .padding(.vertical, 100)
-            .shadow(color: .black.opacity(0.2), radius: 20)
-            .sheet(isPresented: $showPlaceInfo) {
-                if let result = selectedResult {
-                    SearchPlaceConfirmSheet(
-                        result: result,
-                        onConfirm: { confirmedResult in
-                            onPlaceSelected(confirmedResult)
-                            isPresented = false
-                        }
-                    )
-                    .presentationDetents([.large])
-                }
+        }
+        .background(colorScheme == .dark ? Color(.systemBackground) : Color(.systemGroupedBackground))
+        .ignoresSafeArea(.all, edges: [.bottom])
+        .sheet(isPresented: $showPlaceInfo) {
+            if let result = selectedResult {
+                SearchPlaceConfirmSheet(
+                    result: result,
+                    onConfirm: { confirmedResult in
+                        onPlaceSelected(confirmedResult)
+                        isPresented = false
+                    }
+                )
+                .presentationDetents([.large])
             }
         }
         .onAppear {
@@ -76,7 +80,7 @@ struct SearchPlaceOverlay: View {
                 isPresented = false
             } label: {
                 Image(systemName: "arrow.left")
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(.system(size: 20, weight: .semibold))
                     .foregroundColor(.primary)
             }
             
@@ -86,7 +90,7 @@ struct SearchPlaceOverlay: View {
                     .foregroundColor(.secondary)
                 
                 TextField("Search for a place", text: $viewModel.searchQuery)
-                    .font(.system(size: 16))
+                    .font(.system(size: 17))
                     .focused($isFocused)
                     .onChange(of: viewModel.searchQuery) { _, newValue in
                         Task {
@@ -103,16 +107,16 @@ struct SearchPlaceOverlay: View {
                         viewModel.clearResults()
                     } label: {
                         Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 18))
                             .foregroundColor(.secondary)
                     }
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
             .background(colorScheme == .dark ? Color(white: 0.15) : Color(white: 0.95))
             .cornerRadius(12)
         }
-        .padding(16)
     }
     
     private var loadingView: some View {
@@ -406,6 +410,8 @@ struct SearchPlaceConfirmSheet: View {
     @StateObject private var locationManager = LocationManager.shared
     @State private var visits: [EdgeFunctionVisit] = []
     @State private var isLoadingVisits = false
+    @State private var cachedPhotoUrls: [String]? = nil
+    @State private var hasPhotosLoaded = false  // ✅ Simple flag
     
     var body: some View {
         GeometryReader { geometry in
@@ -526,15 +532,60 @@ struct SearchPlaceConfirmSheet: View {
     private var photoSection: some View {
         let photoSize: CGFloat = 200
         
-        // EdgeFunctionVisit doesn't include photos, so just show place preview photos
-        if let photoUrls = result.photoUrls, !photoUrls.isEmpty {
-            PhotoGridView(photos: Array(photoUrls.prefix(10)), photoSize: photoSize)
+        if let photos = cachedPhotoUrls, !photos.isEmpty {
+            ZStack {
+                // Show skeleton until first photo loads
+                if !hasPhotosLoaded {
+                    LoadingPhotoView(height: photoSize)
+                }
+                
+                // Photos (hidden until loaded)
+                PhotoGridView(
+                    photos: photos,
+                    photoSize: photoSize,
+                    onFirstPhotoLoaded: {
+                        hasPhotosLoaded = true
+                    }
+                )
+                .opacity(hasPhotosLoaded ? 1 : 0)
+            }
+            .padding(.top, 30)
+            .padding(.bottom, 20)
+        } else if isLoadingVisits {
+            LoadingPhotoView(height: photoSize)
                 .padding(.top, 30)
                 .padding(.bottom, 20)
         } else {
             EmptyPhotoView(height: photoSize)
+                .padding(.top, 30)
+                .padding(.bottom, 20)
         }
     }
+    
+    // ✅ Pure function - computes photo URLs without side effects
+    // Called ONCE when visits are loaded, result is cached
+    private func computeTopVisitPhotos(from visits: [EdgeFunctionVisit]) -> [String] {
+        print("📷 [SearchConfirm] Processing \(visits.count) visits")
+        
+        let sortedVisits = visits.sorted { visit1, visit2 in
+            (visit1.likesCount ?? 0) > (visit2.likesCount ?? 0)
+        }
+        
+        let topVisits = Array(sortedVisits.prefix(10))
+        
+        var photos: [String] = []
+        for (index, visit) in topVisits.enumerated() {
+            if let firstPhoto = visit.photoUrls.first {
+                photos.append(firstPhoto)
+                print("   [\(index+1)] ✅ Added photo from visit \(visit.id)")
+            }
+        }
+        
+        print("📸 [SearchConfirm] Returning \(photos.count) photo URLs")
+        
+        return photos
+    }
+    
     
     // MARK: - Data Loading (SAME as PlaceInfoCard)
     
@@ -573,9 +624,13 @@ struct SearchPlaceConfirmSheet: View {
             await MainActor.run {
                 visits = response.visits
                 isLoadingVisits = false
+                
+                // ✅ Compute photo URLs only once and cache them
+                cachedPhotoUrls = computeTopVisitPhotos(from: response.visits)
             }
             
             print("✅ [SearchConfirm] Loaded \(response.visits.count) visits")
+            print("📸 [SearchConfirm] Cached \(cachedPhotoUrls?.count ?? 0) photo URLs")
             
         } catch {
             print("❌ [SearchConfirm] Failed to load visits: \(error)")

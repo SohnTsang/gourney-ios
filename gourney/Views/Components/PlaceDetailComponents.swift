@@ -8,11 +8,14 @@ import SwiftUI
 struct PhotoGridView: View {
     let photos: [String]
     let photoSize: CGFloat
+    let onFirstPhotoLoaded: () -> Void
+    
+    @State private var hasNotified = false
     
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(photos, id: \.self) { photoUrl in
+                ForEach(Array(photos.enumerated()), id: \.offset) { index, photoUrl in
                     AsyncImage(url: URL(string: photoUrl)) { phase in
                         switch phase {
                         case .success(let image):
@@ -21,15 +24,22 @@ struct PhotoGridView: View {
                                 .aspectRatio(contentMode: .fill)
                                 .frame(width: photoSize, height: photoSize)
                                 .clipShape(RoundedRectangle(cornerRadius: 12))
-                        case .failure:
-                            PlaceholderPhotoView(size: photoSize)
-                        case .empty:
-                            PlaceholderPhotoView(size: photoSize)
-                                .overlay {
-                                    ProgressView()
+                                .onAppear {
+                                    if !hasNotified {
+                                        hasNotified = true
+                                        onFirstPhotoLoaded()
+                                        print("✅ [Photo \(index+1)/\(photos.count)] First photo loaded - hiding skeleton")
+                                    }
                                 }
+                        case .failure(let error):
+                            EmptyView()
+                                .onAppear {
+                                    print("❌ [Photo \(index+1)/\(photos.count)] Failed - \(error)")
+                                }
+                        case .empty:
+                            EmptyView()
                         @unknown default:
-                            PlaceholderPhotoView(size: photoSize)
+                            EmptyView()
                         }
                     }
                 }
@@ -38,6 +48,9 @@ struct PhotoGridView: View {
         }
     }
 }
+
+// MARK: - Preloaded Photo Grid View (No Gap)
+
 
 struct PlaceholderPhotoView: View {
     let size: CGFloat
@@ -311,5 +324,49 @@ struct EmptyPhotoView: View {
         .frame(maxWidth: .infinity)
         .frame(height: height)
         .padding(.bottom, 20)
+    }
+}
+
+// MARK: - Loading Photo View (Skeleton)
+
+struct LoadingPhotoView: View {
+    let height: CGFloat
+    @State private var isAnimating = false
+    
+    var body: some View {
+        VStack(spacing: 12) {
+            // Skeleton rectangles
+            HStack(spacing: 8) {
+                ForEach(0..<3, id: \.self) { _ in
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color(.systemGray5))
+                        .frame(width: 120, height: 120)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(
+                                    LinearGradient(
+                                        colors: [
+                                            Color.clear,
+                                            Color.white.opacity(0.3),
+                                            Color.clear
+                                        ],
+                                        startPoint: .leading,
+                                        endPoint: .trailing
+                                    )
+                                )
+                                .offset(x: isAnimating ? 200 : -200)
+                        }
+                        .clipped()
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: height)
+        .padding(.bottom, 20)
+        .onAppear {
+            withAnimation(.linear(duration: 1.5).repeatForever(autoreverses: false)) {
+                isAnimating = true
+            }
+        }
     }
 }

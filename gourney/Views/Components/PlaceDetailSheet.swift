@@ -1,6 +1,5 @@
 // Views/Discover/Shared/PlaceDetailSheet.swift
-// ✅ Production-grade with proper task cancellation and memory safety
-// ✅ Fixes EXC_BAD_ACCESS by proper async task lifecycle management
+// ✅ FINAL: No placeholders - only show actual photos
 
 import SwiftUI
 import CoreLocation
@@ -28,9 +27,10 @@ struct PlaceDetailSheet: View {
     @State private var visits: [EdgeFunctionVisit] = []
     @State private var visitCount: Int = 0
     @State private var isLoadingVisits = false
+    @State private var cachedPhotoUrls: [String]? = nil
+    @State private var hasPhotosLoaded = false  // ✅ Simple flag
     @State private var refreshTrigger = UUID()
     
-    // ✅ ADD: Task tracking for proper cancellation
     @State private var loadTask: Task<Void, Never>?
     
     var body: some View {
@@ -45,6 +45,7 @@ struct PlaceDetailSheet: View {
                 
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
+                        // ✅ Always show photo section (it handles empty state internally)
                         photoSection
                         
                         VStack(alignment: .leading, spacing: 0) {
@@ -142,16 +143,12 @@ struct PlaceDetailSheet: View {
         .presentationDragIndicator(.hidden)
         .id(refreshTrigger)
         .task {
-            // ✅ FIXED: Store task reference for proper cancellation
             loadTask = Task {
                 await loadVisits()
             }
-            
-            // Wait for task completion or cancellation
             await loadTask?.value
         }
         .onDisappear {
-            // ✅ CRITICAL: Cancel task when view disappears
             loadTask?.cancel()
             loadTask = nil
         }
@@ -163,19 +160,65 @@ struct PlaceDetailSheet: View {
     private var photoSection: some View {
         let photoSize: CGFloat = 200
         
-        if let photoUrls = photoUrls, !photoUrls.isEmpty {
-            PhotoGridView(photos: Array(photoUrls.prefix(10)), photoSize: photoSize)
+        if let photos = cachedPhotoUrls, !photos.isEmpty {
+            ZStack {
+                // Show skeleton until first photo loads
+                if !hasPhotosLoaded {
+                    LoadingPhotoView(height: photoSize)
+                }
+                
+                // Photos (hidden until loaded)
+                PhotoGridView(
+                    photos: photos,
+                    photoSize: photoSize,
+                    onFirstPhotoLoaded: {
+                        hasPhotosLoaded = true
+                    }
+                )
+                .opacity(hasPhotosLoaded ? 1 : 0)
+            }
+            .padding(.top, 30)
+            .padding(.bottom, 20)
+        } else if isLoadingVisits {
+            LoadingPhotoView(height: photoSize)
                 .padding(.top, 30)
                 .padding(.bottom, 20)
         } else {
             EmptyPhotoView(height: photoSize)
+                .padding(.top, 30)
+                .padding(.bottom, 20)
         }
     }
+    
+    // ✅ Pure function - computes photo URLs without side effects
+    // Called ONCE when visits are loaded, result is cached
+    private func computeTopVisitPhotos(from visits: [EdgeFunctionVisit]) -> [String] {
+        print("📷 [computeTopVisitPhotos] Processing \(visits.count) visits")
+        
+        let sortedVisits = visits.sorted { visit1, visit2 in
+            (visit1.likesCount ?? 0) > (visit2.likesCount ?? 0)
+        }
+        
+        let topVisits = Array(sortedVisits.prefix(10))
+        
+        var photos: [String] = []
+        for (index, visit) in topVisits.enumerated() {
+            if let firstPhoto = visit.photoUrls.first {
+                photos.append(firstPhoto)
+                print("   [\(index+1)] ✅ Added photo from visit \(visit.id)")
+            }
+        }
+        
+        print("📸 [computeTopVisitPhotos] Returning \(photos.count) photo URLs")
+        
+        return photos
+    }
+    
+    // ✅ Preload images so they're ready when skeleton disappears
     
     // MARK: - Data Loading
     
     private func loadVisits() async {
-        // ✅ Check for cancellation early
         guard !Task.isCancelled else { return }
         
         await MainActor.run {
@@ -184,7 +227,6 @@ struct PlaceDetailSheet: View {
         
         print("🔍 [PlaceDetail] Opening place - ID: \(placeId), Name: \(displayName)")
         
-        // ✅ CRITICAL: Validate token before making request
         let tokenValid = await SupabaseClient.shared.ensureValidToken()
         if !tokenValid {
             print("❌ [PlaceDetail] Token validation failed")
@@ -196,7 +238,6 @@ struct PlaceDetailSheet: View {
             return
         }
         
-        // Attempt request (with one retry on 401)
         var attempts = 0
         let maxAttempts = 2
         
@@ -215,7 +256,6 @@ struct PlaceDetailSheet: View {
                 request.setValue(Config.supabaseAnonKey, forHTTPHeaderField: "apikey")
                 request.setValue("v1", forHTTPHeaderField: "X-API-Version")
                 
-                // ✅ Get fresh token (may have been refreshed)
                 if let token = SupabaseClient.shared.getAuthToken() {
                     request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
                     
@@ -226,12 +266,10 @@ struct PlaceDetailSheet: View {
                     print("⚠️ [PlaceDetail] No auth token available")
                 }
                 
-                // ✅ Check cancellation before network call
                 guard !Task.isCancelled else { return }
                 
                 let (data, urlResponse) = try await URLSession.shared.data(for: request)
                 
-                // ✅ Check cancellation after network call
                 guard !Task.isCancelled else { return }
                 
                 guard let httpResponse = urlResponse as? HTTPURLResponse else {
@@ -240,17 +278,15 @@ struct PlaceDetailSheet: View {
                 
                 print("📥 [PlaceDetail] Response: \(httpResponse.statusCode) (attempt \(attempts)/\(maxAttempts))")
                 
-                // Handle 401 - refresh and retry once
                 if httpResponse.statusCode == 401 {
                     if attempts < maxAttempts {
                         print("⚠️ [PlaceDetail] Got 401, refreshing token and retrying...")
                         
-                        // Trigger refresh
                         if let refreshHandler = SupabaseClient.shared.authRefreshHandler {
                             let refreshed = await refreshHandler()
                             if refreshed {
                                 print("✅ [PlaceDetail] Token refreshed, retrying request...")
-                                continue // Retry the request
+                                continue
                             } else {
                                 print("❌ [PlaceDetail] Token refresh failed")
                                 throw APIError.unauthorized
@@ -275,17 +311,24 @@ struct PlaceDetailSheet: View {
                 let decoder = JSONDecoder()
                 let response = try decoder.decode(PlaceVisitsResponse.self, from: data)
                 
-                // ✅ Check cancellation before updating UI
                 guard !Task.isCancelled else { return }
                 
                 await MainActor.run {
                     visits = response.visits
                     visitCount = response.visitCount
                     isLoadingVisits = false
+                    
+                    // ✅ Compute photo URLs only once and cache them
+                    cachedPhotoUrls = computeTopVisitPhotos(from: response.visits)
                 }
                 
                 print("✅ [PlaceDetail] Loaded \(response.visits.count) visits, total count: \(response.visitCount)")
-                return // Success - exit loop
+                print("📸 [PlaceDetail] Cached \(cachedPhotoUrls?.count ?? 0) photo URLs")
+                
+                let visitsWithLikes = response.visits.filter { ($0.likesCount ?? 0) > 0 }
+                print("❤️ [PlaceDetail] Visits with likes: \(visitsWithLikes.count)")
+                
+                return
                 
             } catch is CancellationError {
                 print("⚠️ [PlaceDetail] Task cancelled")
@@ -294,12 +337,10 @@ struct PlaceDetailSheet: View {
                 }
                 return
             } catch let error as APIError {
-                // ✅ Only update UI if not cancelled
                 guard !Task.isCancelled else { return }
                 
                 print("❌ [PlaceDetail] API Error: \(error)")
                 
-                // Don't retry on non-auth errors
                 if case .unauthorized = error {
                     // Already handled above with retry logic
                 } else {
@@ -323,7 +364,6 @@ struct PlaceDetailSheet: View {
             }
         }
         
-        // If we get here, all retries failed
         await MainActor.run {
             visits = []
             visitCount = 0
@@ -395,6 +435,7 @@ struct EdgeFunctionVisit: Codable, Identifiable {
     let userHandle: String
     let userDisplayName: String?
     let userAvatarUrl: String?
+    let likesCount: Int?
     
     enum CodingKeys: String, CodingKey {
         case id
@@ -406,6 +447,7 @@ struct EdgeFunctionVisit: Codable, Identifiable {
         case userHandle = "user_handle"
         case userDisplayName = "user_display_name"
         case userAvatarUrl = "user_avatar_url"
+        case likesCount = "likes_count"
     }
     
     init(from decoder: Decoder) throws {
@@ -420,5 +462,6 @@ struct EdgeFunctionVisit: Codable, Identifiable {
         userHandle = try container.decode(String.self, forKey: .userHandle)
         userDisplayName = try container.decodeIfPresent(String.self, forKey: .userDisplayName)
         userAvatarUrl = try container.decodeIfPresent(String.self, forKey: .userAvatarUrl)
+        likesCount = try container.decodeIfPresent(Int.self, forKey: .likesCount)
     }
 }
