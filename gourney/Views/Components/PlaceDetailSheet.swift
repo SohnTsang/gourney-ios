@@ -1,5 +1,5 @@
-// Views/Discover/Shared/PlaceDetailSheet.swift
-// ✅ FINAL: No placeholders - only show actual photos
+// Views/Components/PlaceDetailSheet.swift
+// ✅ SIMPLIFIED: Single loading overlay, show all at once
 
 import SwiftUI
 import CoreLocation
@@ -24,351 +24,345 @@ struct PlaceDetailSheet: View {
     @Environment(\.colorScheme) private var colorScheme
     @StateObject private var locationManager = LocationManager.shared
     
+    @State private var isLoading = true
     @State private var visits: [EdgeFunctionVisit] = []
     @State private var visitCount: Int = 0
-    @State private var isLoadingVisits = false
+    @State private var avgRating: Double? = nil
+    @State private var placeAddress: String? = nil
+    @State private var placePhone: String? = nil
+    @State private var placeWebsite: String? = nil
     @State private var cachedPhotoUrls: [String]? = nil
-    @State private var hasPhotosLoaded = false  // ✅ Simple flag
-    @State private var refreshTrigger = UUID()
-    
-    @State private var loadTask: Task<Void, Never>?
     
     var body: some View {
-        GeometryReader { geometry in
-            VStack(spacing: 0) {
-                // Drag indicator
-                RoundedRectangle(cornerRadius: 3)
-                    .fill(Color.secondary.opacity(0.3))
-                    .frame(width: 36, height: 5)
-                    .padding(.top, 8)
-                    .padding(.bottom, 12)
-                
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        // ✅ Always show photo section (it handles empty state internally)
-                        photoSection
-                        
-                        VStack(alignment: .leading, spacing: 0) {
-                            // Name
-                            Text(displayName)
-                                .font(.system(size: 22, weight: .bold))
-                                .foregroundColor(.primary)
-                                .padding(.bottom, 8)
-                            
-                            // Rating with distance badge
-                            RatingWithDistanceView(
-                                rating: nil,
-                                distance: calculateDistance()
-                            )
-                            .padding(.bottom, 4)
-                            
-                            // Address
-                            if let address = formattedAddress, !address.isEmpty {
-                                AddressView(address: address)
-                                    .padding(.bottom, 16)
-                            }
-                            
-                            // Visit status
-                            VisitStatusView(visitCount: visitCount, isLoading: isLoadingVisits)
-                                .padding(.bottom, 16)
-                            
-                            Divider()
-                                .padding(.vertical, 16)
-                            
-                            // Phone
-                            if let phone = phoneNumber, !phone.isEmpty {
-                                PhoneButton(phone: phone)
-                                Divider().padding(.vertical, 12)
-                            }
-                            
-                            // Website
-                            if let website = website, !website.isEmpty {
-                                WebsiteButton(website: website)
-                                Divider().padding(.vertical, 12)
-                            }
-                            
-                            // Directions
-                            DirectionsButton(
-                                placeName: displayName,
-                                address: formattedAddress ?? ""
-                            )
-                        }
-                        .padding(.horizontal, 20)
-                        
-                        Spacer().frame(height: 100)
-                    }
-                }
-                
-                // Bottom buttons
+        ZStack {
+            // Content (hidden while loading)
+            GeometryReader { geometry in
                 VStack(spacing: 0) {
-                    HStack(spacing: 12) {
-                        Button {
-                            primaryButtonAction()
-                        } label: {
-                            Text(primaryButtonTitle)
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundColor(.white)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 14)
-                                .background(
-                                    LinearGradient(
-                                        colors: [Color(red: 1.0, green: 0.4, blue: 0.4), Color(red: 0.95, green: 0.3, blue: 0.35)],
-                                        startPoint: .leading,
-                                        endPoint: .trailing
-                                    )
+                    // Drag indicator
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(Color.secondary.opacity(0.3))
+                        .frame(width: 36, height: 5)
+                        .padding(.top, 8)
+                        .padding(.bottom, 12)
+                    
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 0) {
+                            VStack(alignment: .leading, spacing: 0) {
+                                // Name (semibold only)
+                                Text(displayName)
+                                    .font(.system(size: 22, weight: .semibold))
+                                    .foregroundColor(.primary)
+                                    .padding(.bottom, 8)
+                                
+                                // Rating with distance badge
+                                RatingWithDistanceView(
+                                    rating: avgRating,
+                                    distance: calculateDistance()
                                 )
-                                .cornerRadius(12)
-                        }
-                        
-                        Button {
-                            sharePlace()
-                        } label: {
-                            Image(systemName: "square.and.arrow.up")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundColor(.primary)
-                                .frame(width: 48, height: 48)
+                                .padding(.bottom, 4)
+                                
+                                // Address
+                                if let address = placeAddress ?? formattedAddress, !address.isEmpty {
+                                    AddressView(address: address)
+                                        .padding(.bottom, 16)
+                                }
+                                
+                                // Visit status
+                                VisitStatusView(visitCount: visitCount, isLoading: false)
+                                    .padding(.bottom, 20)
+                            }
+                            .padding(.horizontal, 20)
+                            .padding(.top, 16)
+                            
+                            // Photos section (after name/rating/address/visit)
+                            if let photos = cachedPhotoUrls, !photos.isEmpty {
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(spacing: 8) {
+                                        ForEach(Array(photos.enumerated()), id: \.offset) { index, photoUrl in
+                                            AsyncImage(url: URL(string: photoUrl)) { phase in
+                                                switch phase {
+                                                case .success(let image):
+                                                    image
+                                                        .resizable()
+                                                        .aspectRatio(contentMode: .fill)
+                                                        .frame(width: 160, height: 213)
+                                                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                                                case .failure(_):
+                                                    // Don't show placeholder for failed images
+                                                    EmptyView()
+                                                case .empty:
+                                                    ProgressView()
+                                                        .frame(width: 160, height: 213)
+                                                @unknown default:
+                                                    EmptyView()
+                                                }
+                                            }
+                                            .id("\(photoUrl)-\(index)")  // Force refresh on URL change
+                                        }
+                                    }
+                                    .padding(.horizontal, 20)
+                                }
+                                .frame(height: 213)
+                                .padding(.bottom, 20)
+                            } else {
+                                // Empty photo placeholder (3:4 ratio)
+                                VStack(spacing: 12) {
+                                    Image(systemName: "camera.fill")
+                                        .font(.system(size: 40))
+                                        .foregroundColor(.secondary.opacity(0.3))
+                                    Text("Add the first photo here!")
+                                        .font(.system(size: 15, weight: .medium))
+                                        .foregroundColor(.secondary)
+                                }
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 213)
                                 .background(Color(.systemGray6))
                                 .cornerRadius(12)
+                                .padding(.horizontal, 20)
+                                .padding(.bottom, 20)
+                            }
+                            
+                            VStack(alignment: .leading, spacing: 0) {
+                                Divider()
+                                    .padding(.horizontal, 20)
+                                    .padding(.bottom, 16)
+                                
+                                // Directions
+                                DirectionsButton(
+                                    placeName: displayName,
+                                    address: placeAddress ?? formattedAddress ?? ""
+                                )
+                                .padding(.horizontal, 20)
+                                
+                                Divider()
+                                    .padding(.horizontal, 20)
+                                    .padding(.vertical, 12)
+                                
+                                // Phone
+                                if let phone = placePhone ?? phoneNumber, !phone.isEmpty {
+                                    PhoneButton(phone: phone)
+                                        .padding(.horizontal, 20)
+                                    Divider()
+                                        .padding(.horizontal, 20)
+                                        .padding(.vertical, 12)
+                                }
+                                
+                                // Website
+                                if let website = placeWebsite ?? website, !website.isEmpty {
+                                    WebsiteButton(website: website)
+                                        .padding(.horizontal, 20)
+                                    Divider()
+                                        .padding(.horizontal, 20)
+                                        .padding(.vertical, 12)
+                                }
+                            }
+                            
+                            Spacer().frame(height: 100)
                         }
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 12)
-                    .padding(.bottom, max(12, geometry.safeAreaInsets.bottom + 12))
-                    .background(colorScheme == .dark ? Color(.systemBackground) : Color.white)
+                    
+                    // Bottom buttons
+                    VStack(spacing: 0) {
+                        HStack(spacing: 12) {
+                            Button {
+                                primaryButtonAction()
+                            } label: {
+                                Text(primaryButtonTitle)
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundColor(.white)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 14)
+                                    .background(
+                                        LinearGradient(
+                                            colors: [Color(red: 1.0, green: 0.4, blue: 0.4), Color(red: 0.95, green: 0.3, blue: 0.35)],
+                                            startPoint: .leading,
+                                            endPoint: .trailing
+                                        )
+                                    )
+                                    .cornerRadius(12)
+                            }
+                            
+                            Button {
+                                sharePlace()
+                            } label: {
+                                Image(systemName: "square.and.arrow.up")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundColor(.primary)
+                                    .frame(width: 48, height: 48)
+                                    .background(Color(.systemGray6))
+                                    .cornerRadius(12)
+                            }
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.top, 12)
+                        .padding(.bottom, max(12, geometry.safeAreaInsets.bottom + 12))
+                        .background(colorScheme == .dark ? Color(.systemBackground) : Color.white)
+                    }
                 }
+            }
+            .opacity(isLoading ? 0 : 1)  // ✅ Hide ALL content while loading
+            
+            // Loading overlay (on top)
+            if isLoading {
+                VStack(spacing: 16) {
+                    ProgressView()
+                        .scaleEffect(1.2)
+                    Text("Loading place info...")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(colorScheme == .dark ? Color(.systemBackground) : Color.white)
+                .transition(.opacity)
             }
         }
         .background(colorScheme == .dark ? Color(.systemBackground) : Color.white)
-        .presentationDetents([.large])
+        .presentationDetents([.fraction(0.4), .large])
         .presentationDragIndicator(.hidden)
-        .id(refreshTrigger)
-        .task {
-            loadTask = Task {
-                await loadVisits()
-            }
-            await loadTask?.value
+        .presentationBackgroundInteraction(.enabled)
+        .id(placeId)  // ✅ Force reload when placeId changes
+        .onChange(of: placeId) { _ in
+            // ✅ Immediately show loading when placeId changes (prevents name flash)
+            isLoading = true
+            cachedPhotoUrls = nil
+            visits = []
+            avgRating = nil
+            placeAddress = nil
+            placePhone = nil
+            placeWebsite = nil
+        }
+        .task(id: placeId) {  // ✅ Reload when placeId changes
+            await loadAllData()
         }
         .onDisappear {
-            loadTask?.cancel()
-            loadTask = nil
-        }
-    }
-    
-    // MARK: - Photo Section
-    
-    @ViewBuilder
-    private var photoSection: some View {
-        let photoSize: CGFloat = 200
-        
-        if let photos = cachedPhotoUrls, !photos.isEmpty {
-            ZStack {
-                // Show skeleton until first photo loads
-                if !hasPhotosLoaded {
-                    LoadingPhotoView(height: photoSize)
-                }
-                
-                // Photos (hidden until loaded)
-                PhotoGridView(
-                    photos: photos,
-                    photoSize: photoSize,
-                    onFirstPhotoLoaded: {
-                        hasPhotosLoaded = true
-                    }
-                )
-                .opacity(hasPhotosLoaded ? 1 : 0)
-            }
-            .padding(.top, 30)
-            .padding(.bottom, 20)
-        } else if isLoadingVisits {
-            LoadingPhotoView(height: photoSize)
-                .padding(.top, 30)
-                .padding(.bottom, 20)
-        } else {
-            EmptyPhotoView(height: photoSize)
-                .padding(.top, 30)
-                .padding(.bottom, 20)
-        }
-    }
-    
-    // ✅ Pure function - computes photo URLs without side effects
-    // Called ONCE when visits are loaded, result is cached
-    private func computeTopVisitPhotos(from visits: [EdgeFunctionVisit]) -> [String] {
-        print("📷 [computeTopVisitPhotos] Processing \(visits.count) visits")
-        
-        let sortedVisits = visits.sorted { visit1, visit2 in
-            (visit1.likesCount ?? 0) > (visit2.likesCount ?? 0)
-        }
-        
-        let topVisits = Array(sortedVisits.prefix(10))
-        
-        var photos: [String] = []
-        for (index, visit) in topVisits.enumerated() {
-            if let firstPhoto = visit.photoUrls.first {
-                photos.append(firstPhoto)
-                print("   [\(index+1)] ✅ Added photo from visit \(visit.id)")
-            }
-        }
-        
-        print("📸 [computeTopVisitPhotos] Returning \(photos.count) photo URLs")
-        
-        return photos
-    }
-    
-    // ✅ Preload images so they're ready when skeleton disappears
-    
-    // MARK: - Data Loading
-    
-    private func loadVisits() async {
-        guard !Task.isCancelled else { return }
-        
-        await MainActor.run {
-            isLoadingVisits = true
-        }
-        
-        print("🔍 [PlaceDetail] Opening place - ID: \(placeId), Name: \(displayName)")
-        
-        let tokenValid = await SupabaseClient.shared.ensureValidToken()
-        if !tokenValid {
-            print("❌ [PlaceDetail] Token validation failed")
-            await MainActor.run {
-                visits = []
-                visitCount = 0
-                isLoadingVisits = false
-            }
-            return
-        }
-        
-        var attempts = 0
-        let maxAttempts = 2
-        
-        while attempts < maxAttempts {
-            attempts += 1
-            
-            do {
-                let url = "\(Config.supabaseURL)/functions/v1/places-get-visits/\(placeId)?limit=10&friends_only=false"
-                guard let requestURL = URL(string: url) else {
-                    throw APIError.invalidResponse
-                }
-                
-                var request = URLRequest(url: requestURL)
-                request.httpMethod = "GET"
-                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                request.setValue(Config.supabaseAnonKey, forHTTPHeaderField: "apikey")
-                request.setValue("v1", forHTTPHeaderField: "X-API-Version")
-                
-                if let token = SupabaseClient.shared.getAuthToken() {
-                    request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-                    
-                    if let diagnostics = SupabaseClient.shared.diagnoseToken() {
-                        diagnostics.printDiagnostics()
-                    }
-                } else {
-                    print("⚠️ [PlaceDetail] No auth token available")
-                }
-                
-                guard !Task.isCancelled else { return }
-                
-                let (data, urlResponse) = try await URLSession.shared.data(for: request)
-                
-                guard !Task.isCancelled else { return }
-                
-                guard let httpResponse = urlResponse as? HTTPURLResponse else {
-                    throw APIError.invalidResponse
-                }
-                
-                print("📥 [PlaceDetail] Response: \(httpResponse.statusCode) (attempt \(attempts)/\(maxAttempts))")
-                
-                if httpResponse.statusCode == 401 {
-                    if attempts < maxAttempts {
-                        print("⚠️ [PlaceDetail] Got 401, refreshing token and retrying...")
-                        
-                        if let refreshHandler = SupabaseClient.shared.authRefreshHandler {
-                            let refreshed = await refreshHandler()
-                            if refreshed {
-                                print("✅ [PlaceDetail] Token refreshed, retrying request...")
-                                continue
-                            } else {
-                                print("❌ [PlaceDetail] Token refresh failed")
-                                throw APIError.unauthorized
-                            }
-                        } else {
-                            print("❌ [PlaceDetail] No refresh handler available")
-                            throw APIError.unauthorized
-                        }
-                    } else {
-                        print("❌ [PlaceDetail] Max retry attempts reached")
-                        throw APIError.unauthorized
-                    }
-                }
-                
-                guard (200...299).contains(httpResponse.statusCode) else {
-                    if let errorString = String(data: data, encoding: .utf8) {
-                        print("❌ [PlaceDetail] Error response body: \(errorString)")
-                    }
-                    throw APIError.serverError
-                }
-                
-                let decoder = JSONDecoder()
-                let response = try decoder.decode(PlaceVisitsResponse.self, from: data)
-                
-                guard !Task.isCancelled else { return }
-                
-                await MainActor.run {
-                    visits = response.visits
-                    visitCount = response.visitCount
-                    isLoadingVisits = false
-                    
-                    // ✅ Compute photo URLs only once and cache them
-                    cachedPhotoUrls = computeTopVisitPhotos(from: response.visits)
-                }
-                
-                print("✅ [PlaceDetail] Loaded \(response.visits.count) visits, total count: \(response.visitCount)")
-                print("📸 [PlaceDetail] Cached \(cachedPhotoUrls?.count ?? 0) photo URLs")
-                
-                let visitsWithLikes = response.visits.filter { ($0.likesCount ?? 0) > 0 }
-                print("❤️ [PlaceDetail] Visits with likes: \(visitsWithLikes.count)")
-                
-                return
-                
-            } catch is CancellationError {
-                print("⚠️ [PlaceDetail] Task cancelled")
-                await MainActor.run {
-                    isLoadingVisits = false
-                }
-                return
-            } catch let error as APIError {
-                guard !Task.isCancelled else { return }
-                
-                print("❌ [PlaceDetail] API Error: \(error)")
-                
-                if case .unauthorized = error {
-                    // Already handled above with retry logic
-                } else {
-                    await MainActor.run {
-                        visits = []
-                        visitCount = 0
-                        isLoadingVisits = false
-                    }
-                    return
-                }
-            } catch {
-                guard !Task.isCancelled else { return }
-                
-                print("❌ [PlaceDetail] Unexpected error: \(error)")
-                await MainActor.run {
-                    visits = []
-                    visitCount = 0
-                    isLoadingVisits = false
-                }
-                return
-            }
-        }
-        
-        await MainActor.run {
+            // ✅ Aggressive memory cleanup
+            cachedPhotoUrls = nil
             visits = []
-            visitCount = 0
-            isLoadingVisits = false
+            avgRating = nil
+            placeAddress = nil
+            placePhone = nil
+            placeWebsite = nil
+            
+            // ✅ Clear URL cache aggressively to free memory
+            URLCache.shared.removeAllCachedResponses()
+            
+            // ✅ Force memory cleanup
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                URLCache.shared.diskCapacity = 0
+                URLCache.shared.memoryCapacity = 0
+                URLCache.shared.diskCapacity = 10 * 1024 * 1024 // Reset to 10MB
+                URLCache.shared.memoryCapacity = 5 * 1024 * 1024 // Reset to 5MB
+            }
+            
+            print("💾 [PlaceDetail] Memory cleaned on disappear")
         }
+    }
+    
+    // MARK: - Load All Data at Once
+    
+    private func loadAllData() async {
+        await MainActor.run {
+            isLoading = true
+            // Clear previous data IMMEDIATELY to free memory
+            cachedPhotoUrls = nil
+            visits = []
+            avgRating = nil
+            placeAddress = nil
+            placePhone = nil
+            placeWebsite = nil
+        }
+        
+        print("🔍 [PlaceDetail] Loading all data for: \(placeId), Name: \(displayName)")
+        print("💾 [PlaceDetail] Memory cleared before loading")
+        
+        // Load visits and place data in parallel
+        async let visitsTask = fetchVisits()
+        async let placeDataTask = fetchPlaceData(placeId: placeId)
+        
+        let visitsResult = await visitsTask
+        let placeDataResult: (address: String?, phone: String?, website: String?, avgRating: Double?)?
+        do {
+            placeDataResult = try await placeDataTask
+        } catch {
+            print("❌ [PlaceDetail] Failed to fetch place data: \(error)")
+            placeDataResult = nil
+        }
+        
+        await MainActor.run {
+            // Set visits
+            if let visitsResult = visitsResult {
+                visits = visitsResult.visits
+                visitCount = visitsResult.visitCount
+                // ✅ MEMORY FIX: Limit to max 3 photos to prevent memory bloat (was 5)
+                let allPhotos = computeTopVisitPhotos(from: visitsResult.visits)
+                // ✅ Filter out empty/invalid URLs
+                let validPhotos = allPhotos.filter { !$0.isEmpty && URL(string: $0) != nil }
+                cachedPhotoUrls = Array(validPhotos.prefix(3))
+                print("💾 [PlaceDetail] Limited photos from \(allPhotos.count) to \(cachedPhotoUrls?.count ?? 0)")
+            }
+            
+            // Set place data
+            if let placeData = placeDataResult {
+                avgRating = placeData.avgRating
+                placeAddress = placeData.address
+                placePhone = placeData.phone
+                placeWebsite = placeData.website
+            }
+            
+            isLoading = false
+            
+            print("✅ [PlaceDetail] All data loaded:")
+            print("   avgRating: \(avgRating ?? 0.0)")
+            print("   placeAddress: \(placeAddress ?? "nil")")
+            print("   placePhone: \(placePhone ?? "nil")")
+            print("   placeWebsite: \(placeWebsite ?? "nil")")
+            print("   visitCount: \(visitCount)")
+            print("   photoCount: \(cachedPhotoUrls?.count ?? 0)")
+        }
+    }
+    
+    // MARK: - Fetch Visits
+    
+    private func fetchVisits() async -> (visits: [EdgeFunctionVisit], visitCount: Int)? {
+        do {
+            let url = "\(Config.supabaseURL)/functions/v1/places-get-visits/\(placeId)?limit=10&friends_only=false"
+            guard let requestURL = URL(string: url) else { return nil }
+            
+            var request = URLRequest(url: requestURL)
+            request.httpMethod = "GET"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue(Config.supabaseAnonKey, forHTTPHeaderField: "apikey")
+            request.setValue("v1", forHTTPHeaderField: "X-API-Version")
+            
+            if let token = SupabaseClient.shared.getAuthToken() {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+            
+            let (data, response) = try await URLSession.shared.data(for: request)
+            
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+                return nil
+            }
+            
+            let decoder = JSONDecoder()
+            let result = try decoder.decode(PlaceVisitsResponse.self, from: data)
+            
+            return (result.visits, result.visitCount)
+        } catch {
+            print("❌ [PlaceDetail] Failed to fetch visits: \(error)")
+            return nil
+        }
+    }
+    
+    // MARK: - Compute Top Photos
+    
+    private func computeTopVisitPhotos(from visits: [EdgeFunctionVisit]) -> [String] {
+        // ✅ First filter to only visits that HAVE photos
+        let visitsWithPhotos = visits.filter { !$0.photoUrls.isEmpty }
+        // Then sort by likes and get top 10
+        let sortedVisits = visitsWithPhotos.sorted { ($0.likesCount ?? 0) > ($1.likesCount ?? 0) }
+        let topVisits = Array(sortedVisits.prefix(10))
+        return topVisits.compactMap { $0.photoUrls.first }
     }
     
     // MARK: - Helpers
@@ -388,11 +382,11 @@ struct PlaceDetailSheet: View {
     }
     
     private func sharePlace() {
-        guard let url = URL(string: website ?? "https://gourney.app/place/\(placeId)") else { return }
+        guard let url = URL(string: website ?? placeWebsite ?? "https://gourney.app/place/\(placeId)") else { return }
         
         let activityVC = UIActivityViewController(
             activityItems: [
-                "\(displayName)\n\(formattedAddress ?? "")",
+                "\(displayName)\n\(placeAddress ?? formattedAddress ?? "")",
                 url
             ],
             applicationActivities: nil
@@ -403,65 +397,72 @@ struct PlaceDetailSheet: View {
             rootVC.present(activityVC, animated: true)
         }
     }
-}
-
-// MARK: - Edge Function Response Models
-
-struct PlaceVisitsResponse: Codable {
-    let place: PlaceInfo
-    let visits: [EdgeFunctionVisit]
-    let nextCursor: String?
-    let visitCount: Int
     
-    enum CodingKeys: String, CodingKey {
-        case place
-        case visits
-        case nextCursor = "next_cursor"
-        case visitCount = "visit_count"
-    }
-}
-
-struct PlaceInfo: Codable {
-    let id: String
-}
-
-struct EdgeFunctionVisit: Codable, Identifiable {
-    let id: String
-    let userId: String
-    let rating: Int?
-    let comment: String?
-    let photoUrls: [String]
-    let visitedAt: String
-    let userHandle: String
-    let userDisplayName: String?
-    let userAvatarUrl: String?
-    let likesCount: Int?
-    
-    enum CodingKeys: String, CodingKey {
-        case id
-        case userId = "user_id"
-        case rating
-        case comment
-        case photoUrls = "photo_urls"
-        case visitedAt = "visited_at"
-        case userHandle = "user_handle"
-        case userDisplayName = "user_display_name"
-        case userAvatarUrl = "user_avatar_url"
-        case likesCount = "likes_count"
-    }
-    
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
+    private func fetchPlaceData(placeId: String) async throws -> (address: String?, phone: String?, website: String?, avgRating: Double?)? {
+        print("🏢 [PlaceData] Fetching place details for: \(placeId)")
         
-        id = try container.decode(String.self, forKey: .id)
-        userId = try container.decode(String.self, forKey: .userId)
-        rating = try container.decodeIfPresent(Int.self, forKey: .rating)
-        comment = try container.decodeIfPresent(String.self, forKey: .comment)
-        photoUrls = try container.decode([String].self, forKey: .photoUrls)
-        visitedAt = try container.decode(String.self, forKey: .visitedAt)
-        userHandle = try container.decode(String.self, forKey: .userHandle)
-        userDisplayName = try container.decodeIfPresent(String.self, forKey: .userDisplayName)
-        userAvatarUrl = try container.decodeIfPresent(String.self, forKey: .userAvatarUrl)
-        likesCount = try container.decodeIfPresent(Int.self, forKey: .likesCount)
+        let url = "\(Config.supabaseURL)/functions/v1/places-detail/\(placeId)"
+        guard let requestURL = URL(string: url) else { return nil }
+        
+        var request = URLRequest(url: requestURL)
+        request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(Config.supabaseAnonKey, forHTTPHeaderField: "apikey")
+        request.setValue("v1", forHTTPHeaderField: "X-API-Version")
+        
+        if let token = SupabaseClient.shared.getAuthToken() {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            return nil
+        }
+        
+        struct PlaceDetailResponse: Codable {
+            let place: PlaceObject
+            
+            struct PlaceObject: Codable {
+                let address: String?
+                let phone: String?
+                let website: String?
+                let avgRating: Double?
+                let attributes: PlaceAttributes?
+                
+                enum CodingKeys: String, CodingKey {
+                    case address, phone, website
+                    case avgRating = "avg_rating"
+                    case attributes
+                }
+            }
+        }
+        
+        struct PlaceAttributes: Codable {
+            let formattedAddress: String?
+            let phone: String?
+            let website: String?
+            
+            enum CodingKeys: String, CodingKey {
+                case formattedAddress = "formatted_address"
+                case phone, website
+            }
+        }
+        
+        let decoder = JSONDecoder()
+        let placeResponse = try decoder.decode(PlaceDetailResponse.self, from: data)
+        let placeDetail = placeResponse.place
+        
+        // Priority: Direct columns > attributes JSONB
+        let finalAddress = placeDetail.address ?? placeDetail.attributes?.formattedAddress
+        let finalPhone = placeDetail.phone ?? placeDetail.attributes?.phone
+        let finalWebsite = placeDetail.website ?? placeDetail.attributes?.website
+        
+        return (
+            address: finalAddress,
+            phone: finalPhone,
+            website: finalWebsite,
+            avgRating: placeDetail.avgRating
+        )
     }
 }

@@ -75,16 +75,17 @@ struct RatingWithDistanceView: View {
     
     var body: some View {
         HStack(spacing: 4) {
-            // Rating stars
+            // Rating text
             Text(ratingText)
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundColor(.primary)
             
+            // Rating stars (filled based on rating)
             HStack(spacing: 2) {
                 ForEach(0..<5) { index in
-                    Image(systemName: "star")
+                    Image(systemName: index < filledStarsCount ? "star.fill" : "star")
                         .font(.system(size: 10))
-                        .foregroundColor(.gray)
+                        .foregroundColor(index < filledStarsCount ? .yellow : .gray)
                 }
             }
             
@@ -112,6 +113,13 @@ struct RatingWithDistanceView: View {
             return String(format: "%.1f", rating)
         }
         return "0"
+    }
+    
+    private var filledStarsCount: Int {
+        if let rating = rating {
+            return Int(round(rating))
+        }
+        return 0
     }
 }
 

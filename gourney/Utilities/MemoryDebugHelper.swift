@@ -6,9 +6,6 @@ import Foundation
 class MemoryDebugHelper {
     static let shared = MemoryDebugHelper()
     
-    private var timer: Timer?
-    private var isMonitoring = false
-    
     private init() {}
     
     // MARK: - Memory Reporting
@@ -36,27 +33,5 @@ class MemoryDebugHelper {
         } else {
             return 0
         }
-    }
-    
-    // MARK: - Continuous Monitoring
-    
-    func startMonitoring(interval: TimeInterval = 3.0) {
-        guard !isMonitoring else { return }
-        
-        isMonitoring = true
-        print("🔍 [Memory Monitor] Starting (every \(interval)s)")
-        
-        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
-            self?.logMemory(tag: "Monitor")
-        }
-    }
-    
-    func stopMonitoring() {
-        guard isMonitoring else { return }
-        
-        isMonitoring = false
-        timer?.invalidate()
-        timer = nil
-        print("🛑 [Memory Monitor] Stopped")
     }
 }

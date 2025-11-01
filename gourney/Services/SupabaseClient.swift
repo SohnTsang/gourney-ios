@@ -211,7 +211,7 @@ class SupabaseClient {
             // ✅ TEMPORARY DEBUG
             if let jsonString = String(data: data, encoding: .utf8) {
                 print("📦 [API] Raw JSON:")
-                print(jsonString.prefix(500))  // First 500 chars only
+                print(jsonString.prefix(2000))  // First 500 chars only
             }
             
             return try decoder.decode(T.self, from: data)

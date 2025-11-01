@@ -1,5 +1,5 @@
 // ViewModels/DiscoverViewModel.swift
-// ✅ COMPLETE FIX: Proper search with DB + Apple results
+// ✅ FIXED: Uses correct Place field names (avgRating, visitCount, phone)
 
 import Foundation
 import CoreLocation
@@ -26,7 +26,7 @@ class DiscoverViewModel: ObservableObject {
     private var lastSearchCenter: CLLocationCoordinate2D?
     private var searchTask: Task<Void, Never>?
 
-    // MARK: - Search Places - ✅ COMPLETE FIX
+    // MARK: - Search Places
     
     func searchPlaces(query: String, mapCenter: CLLocationCoordinate2D) async {
         guard !query.isEmpty else {
@@ -34,7 +34,6 @@ class DiscoverViewModel: ObservableObject {
             return
         }
         
-        // ✅ 1. Clear old search results IMMEDIATELY
         searchResults.removeAll(keepingCapacity: false)
         beenToPlaces.removeAll(keepingCapacity: false)
         selectedPlace = nil
@@ -51,14 +50,14 @@ class DiscoverViewModel: ObservableObject {
         
         var dbPlaceIds = Set<String>()
         
-        // TIER 1: Database Search (max 20 instead of 45)
+        // TIER 1: Database Search
         do {
             let requestBody: [String: Any] = [
                 "query": query,
                 "lat": mapCenter.latitude,
                 "lng": mapCenter.longitude,
                 "radius": 2000,
-                "limit": 20  // ✅ Reduced from 45
+                "limit": 20
             ]
             
             let response: SearchPlacesResponse = try await client.post(
@@ -68,7 +67,7 @@ class DiscoverViewModel: ObservableObject {
             
             let dbResults = response.results.filter { $0.existsInDb }
             
-            beenToPlaces = dbResults.compactMap { result in
+            beenToPlaces = dbResults.compactMap { result -> PlaceWithVisits? in
                 guard let placeId = result.dbPlaceId else { return nil }
                 dbPlaceIds.insert(placeId)
                 
@@ -87,9 +86,10 @@ class DiscoverViewModel: ObservableObject {
                     photoUrls: result.photoUrls,
                     openNow: nil,
                     priceLevel: nil,
-                    rating: nil,
+                    avgRating: nil,           // ✅ FIXED: was rating
+                    visitCount: nil,          // ✅ FIXED: was missing
                     userRatingsTotal: nil,
-                    phoneNumber: nil,
+                    phone: nil,               // ✅ FIXED: was phoneNumber
                     website: nil,
                     openingHours: nil,
                     createdAt: nil,
@@ -108,7 +108,7 @@ class DiscoverViewModel: ObservableObject {
             print("⚠️ [Tier 1] Failed: \(error)")
         }
         
-        // ✅ TIER 2: Apple MapKit (ALWAYS)
+        // TIER 2: Apple MapKit
         print("🎯 [Tier 2] Searching Apple Maps for: '\(query)'")
         
         let mapSpan = MKCoordinateSpan(latitudeDelta: 0.02, longitudeDelta: 0.02)
@@ -123,7 +123,6 @@ class DiscoverViewModel: ObservableObject {
             
             print("🎯 [Tier 2] Apple returned \(appleResults.count) raw results")
             
-            // Filter: in bounds + not in DB
             let filteredApple = appleResults.filter { apple in
                 let latDiff = abs(apple.lat - mapCenter.latitude)
                 let lngDiff = abs(apple.lng - mapCenter.longitude)
@@ -182,51 +181,35 @@ class DiscoverViewModel: ObservableObject {
         print("   🔍 Apple (orange): \(searchResults.count)")
         print("   📊 Total: \(beenToPlaces.count + searchResults.count)")
         
-        
         isSearching = false
         MemoryDebugHelper.shared.logMemory(tag: "✅ After Search")
-
     }
     
     func triggerSearch(query: String, mapCenter: CLLocationCoordinate2D) {
         searchTask?.cancel()
         prepareForNewSearch()
-
-        searchTask = Task {  // ✅ Remove [weak self]
+        searchTask = Task {
             await searchPlaces(query: query, mapCenter: mapCenter)
         }
     }
     
-    // MARK: - Clear Search
-    
     func clearSearch() {
         print("🧹 [Search] Clearing...")
-        
         Task {
             await aggressiveCleanup()
             await fetchBeenToPlaces()
-            
-            // ✅ Force memory release
             MemoryDebugHelper.shared.logMemory(tag: "🧹 After Cleanup")
         }
     }
-
     
     private func prepareForNewSearch() {
-        print("🧹 [Prepare] Cleaning before new search...")
-        print("   Current searchResults: \(searchResults.count)")
-        print("   Current beenToPlaces: \(beenToPlaces.count)")
-        
         searchResults.removeAll(keepingCapacity: false)
         beenToPlaces.removeAll(keepingCapacity: false)
         error = nil
         hasActiveSearch = false
-        
-        print("   ✅ Cleared for new search")
     }
     
     private func aggressiveCleanup() async {
-        // ✅ Clear everything and drop capacity
         searchResults.removeAll(keepingCapacity: false)
         beenToPlaces.removeAll(keepingCapacity: false)
         selectedPlace = nil
@@ -235,38 +218,29 @@ class DiscoverViewModel: ObservableObject {
         error = nil
         lastSearchQuery = ""
         lastSearchCenter = nil
-        
-        // ✅ Recreate empty arrays (forces deallocation)
         searchResults = []
         beenToPlaces = []
-        
-        print("✅ [Cleanup] Memory released")
     }
-
     
     // MARK: - Fetch "Been To" Places
     
     func fetchBeenToPlaces(in region: MKCoordinateRegion? = nil) async {
-        guard searchResults.isEmpty && !isSearching else {
-            return
-        }
+        guard searchResults.isEmpty && !isSearching else { return }
         
         print("🗺️ [Fetch] Fetching places...")
-        print("   Region: \(region != nil ? "specified" : "default")")
         
         isLoading = true
         error = nil
         
-        // ✅ Clear old data before fetching new
         let oldCount = beenToPlaces.count
         beenToPlaces.removeAll(keepingCapacity: false)
         print("   🧹 Cleared \(oldCount) old places")
         
         do {
             var queryItems = [
-                URLQueryItem(name: "select", value: "id,provider,google_place_id,apple_place_id,name_en,name_ja,name_zh,lat,lng,city,ward,categories,created_at,updated_at"),
+                URLQueryItem(name: "select", value: "id,provider,google_place_id,apple_place_id,name_en,name_ja,name_zh,lat,lng,city,ward,categories,avg_rating,visit_count,phone,website,address,created_at,updated_at"),
                 URLQueryItem(name: "order", value: "created_at.desc"),
-                URLQueryItem(name: "limit", value: "50")  // Keep at 50 for map
+                URLQueryItem(name: "limit", value: "50")
             ]
             
             if let region = region {
@@ -313,7 +287,6 @@ class DiscoverViewModel: ObservableObject {
         
         print("   ✅ Fetched \(beenToPlaces.count) places")
         isLoading = false
-        
         MemoryDebugHelper.shared.logMemory(tag: "🗺️ After Fetch")
     }
     
@@ -358,11 +331,56 @@ class DiscoverViewModel: ObservableObject {
         }
     }
     
-    // MARK: - Force Cleanup
-    
     func forceCleanup() {
         searchTask?.cancel()
         prepareForNewSearch()
     }
+    
+    // MARK: - Refresh Single Place
+    
+    /// ✅ Efficiently refresh only one place after visit is posted
+    /// Only fetches updated stats for the specific place, doesn't reload entire map
+    func refreshPlace(placeId: String) async {
+        print("🔄 [Refresh] Updating place: \(placeId)")
+        
+        do {
+            let queryItems = [
+                URLQueryItem(name: "id", value: "eq.\(placeId)"),
+                URLQueryItem(name: "select", value: "id,provider,google_place_id,apple_place_id,name_en,name_ja,name_zh,lat,lng,city,ward,categories,avg_rating,visit_count,phone,website,address,created_at,updated_at")
+            ]
+            
+            let places: [Place] = try await client.get(
+                path: "/rest/v1/places",
+                queryItems: queryItems
+            )
+            
+            guard let updatedPlace = places.first else {
+                print("⚠️ [Refresh] Place not found: \(placeId)")
+                return
+            }
+            
+            // ✅ Update in beenToPlaces if it exists there
+            if let index = beenToPlaces.firstIndex(where: { $0.place.id == placeId }) {
+                let oldItem = beenToPlaces[index]
+                beenToPlaces[index] = PlaceWithVisits(
+                    place: updatedPlace,
+                    visitCount: oldItem.visitCount,
+                    friendVisitCount: oldItem.friendVisitCount,
+                    visits: oldItem.visits
+                )
+                print("✅ [Refresh] Updated in beenToPlaces")
+            }
+            
+            // ✅ Update selectedPlace if it's the same place
+            if selectedPlace?.id == placeId {
+                selectedPlace = updatedPlace
+                print("✅ [Refresh] Updated selectedPlace")
+            }
+            
+            print("✅ [Refresh] Place \(placeId) refreshed successfully")
+            
+        } catch {
+            print("❌ [Refresh] Failed: \(error)")
+        }
+    }
 }
-

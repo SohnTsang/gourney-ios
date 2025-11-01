@@ -48,7 +48,7 @@ struct Visit: Codable, Identifiable {
     }
 }
 
-// MARK: - OpeningHours (ADDED - This was missing!)
+// MARK: - OpeningHours
 
 struct OpeningHours: Codable {
     let openNow: Bool?
@@ -64,7 +64,7 @@ struct OpeningHours: Codable {
 
 struct CreateVisitRequest: Codable {
     let placeId: String?
-    let applePlaceData: ApplePlaceData?      // ✅ ADD THIS LINE
+    let applePlaceData: ApplePlaceData?
     let googlePlaceData: GooglePlaceData?
     let manualPlace: ManualPlaceData?
     let rating: Int?
@@ -75,7 +75,7 @@ struct CreateVisitRequest: Codable {
     
     enum CodingKeys: String, CodingKey {
         case placeId = "place_id"
-        case applePlaceData = "apple_place_data"  // ✅ ADD THIS LINE
+        case applePlaceData = "apple_place_data"
         case googlePlaceData = "google_place_data"
         case manualPlace = "manual_place"
         case rating
@@ -130,7 +130,7 @@ struct GooglePlaceData: Codable {
     }
 }
 
-// MARK: - ApplePlaceData
+// MARK: - ApplePlaceData (UPDATED with all new fields)
 
 struct ApplePlaceData: Codable {
     let applePlaceId: String
@@ -146,6 +146,49 @@ struct ApplePlaceData: Codable {
     let website: String?
     let categories: [String]?
     
+    // ✅ NEW FIELDS - Optional to maintain backward compatibility
+    let postalCode: String?
+    let country: String?
+    let countryCode: String?
+    let timeZone: String?
+    
+    // ✅ Custom initializer with default values for new fields
+    init(
+        applePlaceId: String,
+        name: String,
+        nameJa: String? = nil,
+        nameZh: String? = nil,
+        address: String,
+        city: String,
+        ward: String? = nil,
+        lat: Double,
+        lng: Double,
+        phone: String? = nil,
+        website: String? = nil,
+        categories: [String]? = nil,
+        postalCode: String? = nil,
+        country: String? = nil,
+        countryCode: String? = nil,
+        timeZone: String? = nil
+    ) {
+        self.applePlaceId = applePlaceId
+        self.name = name
+        self.nameJa = nameJa
+        self.nameZh = nameZh
+        self.address = address
+        self.city = city
+        self.ward = ward
+        self.lat = lat
+        self.lng = lng
+        self.phone = phone
+        self.website = website
+        self.categories = categories
+        self.postalCode = postalCode
+        self.country = country
+        self.countryCode = countryCode
+        self.timeZone = timeZone
+    }
+    
     enum CodingKeys: String, CodingKey {
         case applePlaceId = "apple_place_id"
         case name
@@ -159,6 +202,10 @@ struct ApplePlaceData: Codable {
         case phone
         case website
         case categories
+        case postalCode = "postal_code"
+        case country
+        case countryCode = "country_code"
+        case timeZone = "time_zone"
     }
 }
 
@@ -198,5 +245,3 @@ struct CreateVisitResponse: Codable {
     let pointsEarned: Int
     let moderationNote: String?
 }
-
-

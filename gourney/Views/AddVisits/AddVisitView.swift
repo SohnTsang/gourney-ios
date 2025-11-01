@@ -19,8 +19,10 @@ struct Design {
 @MainActor
 class AddVisitViewModel: ObservableObject {
     @Published var selectedPhotos: [PhotosPickerItem] = []
-    @Published var loadedImages: [UIImage] = []
+    @Published var loadedImages: [(id: UUID, image: UIImage, pickerItem: PhotosPickerItem)] = []
     @Published var uploadedPhotoURLs: [String] = []
+    @Published var uploadProgress: [UUID: Double] = [:]
+    @Published var isUploadingPhotos = false
     @Published var rating: Int = 0
     @Published var comment: String = ""
     @Published var visibility: VisitVisibility = .public
@@ -31,6 +33,10 @@ class AddVisitViewModel: ObservableObject {
     @Published var selectedPhotoIndex: Int?
     @Published var showSearchOverlay = false
     @Published var showErrorAlert = false
+    
+    private var tempFileUrls: [UUID: URL] = [:]
+    var shouldIgnorePhotoChanges = false  // Internal for View access
+    var onVisitPosted: ((String) -> Void)?  // ✅ Callback for place refresh
     
     let maxPhotos = 5
     let maxCommentLength = 1000
@@ -45,22 +51,162 @@ class AddVisitViewModel: ObservableObject {
     }
     
     var isValid: Bool {
-        hasPlace && rating > 0 && (!uploadedPhotoURLs.isEmpty || !comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        // Only require: place + (photo OR comment)
+        // Rating is OPTIONAL
+        hasPlace && (!uploadedPhotoURLs.isEmpty || !comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) && !isUploadingPhotos
     }
     
     func loadPhotos() async {
-        guard !selectedPhotos.isEmpty else { return }
-        var newImages: [UIImage] = []
+        guard !selectedPhotos.isEmpty else {
+            // ✅ FIX 1: Reset flag when selectedPhotos is empty
+            shouldIgnorePhotoChanges = false
+            return
+        }
+        guard !shouldIgnorePhotoChanges else {
+            print("🚫 Ignoring photo change (programmatic removal)")
+            shouldIgnorePhotoChanges = false
+            return
+        }
         
-        for (index, item) in selectedPhotos.enumerated() {
+        await MainActor.run {
+            isUploadingPhotos = true
+            uploadProgress = [:]
+        }
+        
+        var newImages: [(id: UUID, image: UIImage, pickerItem: PhotosPickerItem)] = []
+        
+        for item in selectedPhotos {
             if let data = try? await item.loadTransferable(type: Data.self),
                let image = UIImage(data: data) {
                 let resized = resizeImageForPreview(image)
-                newImages.append(resized)
+                let id = UUID()
+                
+                // Save to temp disk immediately for memory efficiency
+                let tempUrl = await saveTempFile(resized, id: id)
+                if let tempUrl = tempUrl {
+                    await MainActor.run {
+                        self.tempFileUrls[id] = tempUrl
+                    }
+                }
+                
+                newImages.append((id: id, image: resized, pickerItem: item))
+                
+                await MainActor.run {
+                    self.loadedImages = newImages
+                    self.uploadProgress[id] = 0.0
+                }
             }
         }
         
-        await MainActor.run { self.loadedImages = newImages }
+        // Upload photos immediately after loading
+        do {
+            try await uploadPhotos()
+        } catch {
+            print("❌ [AddVisit] Photo upload failed: \(error)")
+            await MainActor.run {
+                self.errorMessage = "Failed to upload photos"
+                self.showErrorAlert = true
+                self.isUploadingPhotos = false
+            }
+        }
+    }
+    
+    private func saveTempFile(_ image: UIImage, id: UUID) async -> URL? {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("gourney_photos", isDirectory: true)
+        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        
+        let fileUrl = tempDir.appendingPathComponent("\(id.uuidString).jpg")
+        
+        guard let data = image.jpegData(compressionQuality: 0.8) else { return nil }
+        
+        do {
+            try data.write(to: fileUrl)
+            print("💾 Saved temp file: \(fileUrl.lastPathComponent)")
+            return fileUrl
+        } catch {
+            print("❌ Failed to save temp file: \(error)")
+            return nil
+        }
+    }
+    
+    func removePhoto(withId id: UUID) {
+        // Delete temp file from disk
+        if let tempUrl = tempFileUrls[id] {
+            try? FileManager.default.removeItem(at: tempUrl)
+            tempFileUrls.removeValue(forKey: id)
+            print("🗑️ Deleted temp file for photo \(id)")
+        }
+        
+        // Find the index in loadedImages
+        guard let index = loadedImages.firstIndex(where: { $0.id == id }) else { return }
+        
+        // Remove from loadedImages
+        loadedImages.remove(at: index)
+        
+        // Set flag to prevent onChange from triggering reload
+        shouldIgnorePhotoChanges = true
+        
+        // Remove from selectedPhotos at the same index to untick
+        if index < selectedPhotos.count {
+            selectedPhotos.remove(at: index)
+            print("✅ Unticked photo in picker at index \(index)")
+        }
+        
+        // Remove from uploaded URLs at the same index
+        if index < uploadedPhotoURLs.count {
+            uploadedPhotoURLs.remove(at: index)
+        }
+        
+        // Remove progress
+        uploadProgress.removeValue(forKey: id)
+        
+        // ✅ FIX 1: Reset flag after short delay if all photos removed
+        Task {
+            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
+            await MainActor.run {
+                if self.loadedImages.isEmpty && self.selectedPhotos.isEmpty {
+                    self.shouldIgnorePhotoChanges = false
+                    print("✅ Flag reset: Ready for new photos")
+                }
+            }
+        }
+    }
+    
+    func cleanupAllTempFiles() {
+        for (_, url) in tempFileUrls {
+            try? FileManager.default.removeItem(at: url)
+        }
+        tempFileUrls.removeAll()
+        print("🗑️ Cleaned up all temp files")
+    }
+    
+    func resetForm() {
+        // Clean up temp files
+        cleanupAllTempFiles()
+        
+        // Reset all state
+        shouldIgnorePhotoChanges = true
+        selectedPhotos = []
+        loadedImages = []
+        uploadedPhotoURLs = []
+        uploadProgress = [:]
+        isUploadingPhotos = false
+        rating = 0
+        comment = ""
+        visibility = .public
+        selectedPlaceResult = nil
+        isSubmitting = false
+        errorMessage = nil
+        selectedPhotoIndex = nil
+        
+        // Reset flag after clearing
+        Task {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            await MainActor.run {
+                self.shouldIgnorePhotoChanges = false
+                print("✅ Form reset complete - ready for new visit")
+            }
+        }
     }
     
     private func resizeImageForPreview(_ image: UIImage) -> UIImage {
@@ -87,15 +233,29 @@ class AddVisitViewModel: ObservableObject {
             throw APIError.unauthorized
         }
         
-        // ✅ NO PROGRESS LOGGING - Silent upload
+        await MainActor.run {
+            isUploadingPhotos = true
+        }
+        
+        let images = loadedImages.map { $0.image }
+        let ids = loadedImages.map { $0.id }
+        
         let urls = try await PhotoUploadService.shared.uploadPhotos(
-            loadedImages,
+            images,
             userId: user.id,
-            progressHandler: { _, _ in }  // ✅ EMPTY - No progress updates
+            progressHandler: { index, progress in
+                Task { @MainActor in
+                    if index < ids.count {
+                        self.uploadProgress[ids[index]] = progress
+                    }
+                }
+            }
         )
         
         await MainActor.run {
             self.uploadedPhotoURLs = urls
+            self.isUploadingPhotos = false
+            self.uploadProgress = [:]
         }
     }
     
@@ -125,22 +285,23 @@ class AddVisitViewModel: ObservableObject {
         errorMessage = nil
         
         do {
-            // Upload photos silently
-            if !loadedImages.isEmpty && uploadedPhotoURLs.isEmpty {
-                try await uploadPhotos()
-            }
+            // Photos already uploaded in loadPhotos()
             
             var requestBody: [String: Any] = [
-                "rating": rating,
                 "comment": comment.trimmingCharacters(in: .whitespacesAndNewlines),
                 "photo_urls": uploadedPhotoURLs,
                 "visibility": visibility.rawValue
             ]
             
+            // ✅ Only include rating if user selected one (rating is optional)
+            if rating > 0 {
+                requestBody["rating"] = rating
+            }
+            
             if let dbPlaceId = placeResult.dbPlaceId {
                 requestBody["place_id"] = dbPlaceId
             } else if placeResult.source == .apple, let appleId = placeResult.applePlaceId {
-                // ✅ FIXED: Match RPC parameter order exactly
+                // ✅ FIXED: Send ALL Apple place fields to edge function
                 var applePlaceData: [String: Any] = [
                     "apple_place_id": appleId,
                     "name": placeResult.displayName,
@@ -149,24 +310,52 @@ class AddVisitViewModel: ObservableObject {
                     "city": placeResult.appleFullData?.city ?? "",  // ✅ REQUIRED
                 ]
                 
-                // Optional fields
+                // ✅ Address fields
                 if let address = placeResult.formattedAddress, !address.isEmpty {
                     applePlaceData["address"] = address
                 }
                 if let ward = placeResult.appleFullData?.ward {
                     applePlaceData["ward"] = ward
                 }
+                if let postalCode = placeResult.appleFullData?.postalCode {
+                    applePlaceData["postal_code"] = postalCode
+                }
+                if let country = placeResult.appleFullData?.country {
+                    applePlaceData["country"] = country
+                }
+                if let countryCode = placeResult.appleFullData?.countryCode {
+                    applePlaceData["country_code"] = countryCode
+                }
+                
+                // ✅ Contact info
                 if let phone = placeResult.appleFullData?.phone {
                     applePlaceData["phone"] = phone
                 }
                 if let website = placeResult.appleFullData?.website {
                     applePlaceData["website"] = website
                 }
+                
+                // ✅ Categories
                 if let categories = placeResult.appleFullData?.categories, !categories.isEmpty {
                     applePlaceData["categories"] = categories
                 }
                 
+                // ✅ Multilingual names (if available)
+                if let nameJa = placeResult.appleFullData?.nameJa {
+                    applePlaceData["name_ja"] = nameJa
+                }
+                if let nameZh = placeResult.appleFullData?.nameZh {
+                    applePlaceData["name_zh"] = nameZh
+                }
+                
+                // ✅ Time zone (already a String, no need for .identifier)
+                if let timeZone = placeResult.appleFullData?.timeZone {
+                    applePlaceData["time_zone"] = timeZone
+                }
+                
                 requestBody["apple_place_data"] = applePlaceData
+                
+                print("📦 [AddVisit] Sending Apple place data with \(applePlaceData.count) fields")
             } else if placeResult.source == .google, let googleId = placeResult.googlePlaceId {
                 requestBody["google_place_data"] = [
                     "google_place_id": googleId,
@@ -185,12 +374,21 @@ class AddVisitViewModel: ObservableObject {
             
             print("✅ [AddVisit] Success! Visit ID: \(response.visitId)")
             
+            // ✅ Notify parent view to refresh only this place
+            onVisitPosted?(response.placeId)
+            
             await MainActor.run {
                 isSubmitting = false
-                showSuccess = true
-                loadedImages = []
-                selectedPhotos = []
-                uploadedPhotoURLs = []
+                // ✅ Show toast instead of alert
+                ToastManager.shared.showSuccess("Visit posted!")
+            }
+            
+            // ✅ Small delay then dismiss and reset
+            try? await Task.sleep(nanoseconds: 300_000_000) // 0.3s
+            
+            await MainActor.run {
+                self.showSuccess = true  // Trigger dismiss
+                self.resetForm()
             }
         } catch let error as APIError {
             let userMessage: String
@@ -231,17 +429,23 @@ class AddVisitViewModel: ObservableObject {
 }
 
 struct AddVisitView: View {
-    var prefilledPlace: PlaceSearchResult? = nil  // ✅ ADD THIS LINE
-
+    var prefilledPlace: PlaceSearchResult? = nil
+    var showBackButton: Bool = false
+    var onVisitPosted: ((String) -> Void)? = nil  // ✅ Callback with placeId
+    
     @StateObject private var viewModel = AddVisitViewModel()
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
 
+    private var backgroundColor: Color {
+        colorScheme == .dark ? Color.black : Color(white: 0.97)
+    }
+    
     var body: some View {
         ZStack {
-            (colorScheme == .dark ? Color.black : Color(white: 0.97))
+            backgroundColor
                 .ignoresSafeArea()
-            
+
             VStack(spacing: 0) {
                 navigationBar
                 
@@ -278,18 +482,21 @@ struct AddVisitView: View {
                 )
             }
         }
-        .alert("Posted!", isPresented: $viewModel.showSuccess) {
-            Button("OK") { dismiss() }
-        } message: {
-            Text("Your visit has been shared!")
-        }
         .alert("Error", isPresented: $viewModel.showErrorAlert) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(viewModel.errorMessage ?? "Something went wrong")
         }
+        .onChange(of: viewModel.showSuccess) { _, isSuccess in
+            if isSuccess {
+                dismiss()  // ✅ Auto-dismiss when success
+            }
+        }
         .onAppear {
-            // ✅ ADD THIS BLOCK
+            // ✅ Pass callback to ViewModel
+            viewModel.onVisitPosted = onVisitPosted
+            
+            // ✅ Pre-fill place if provided
             if let prefilled = prefilledPlace {
                 viewModel.selectedPlaceResult = prefilled
                 print("✅ [AddVisit] Pre-filled place: \(prefilled.displayName)")
@@ -298,17 +505,30 @@ struct AddVisitView: View {
         .onChange(of: viewModel.selectedPhotos) { _, _ in
             Task { await viewModel.loadPhotos() }
         }
+        .onDisappear {
+            viewModel.cleanupAllTempFiles()
+        }
     }
     private var navigationBar: some View {
         HStack(spacing: 16) {
+            // ✅ Left side
+            if showBackButton {
+                Button(action: {
+                    dismiss()
+                }) {
+                    HStack(spacing: 3) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 14, weight: .semibold))
+                        Text("Back")
+                            .font(.system(size: 16))
+                    }
+                    .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
+                }
+            }
             
             Spacer()
             
-            Text("Add Visit")
-                .font(.system(size: 18, weight: .bold))
-            
-            Spacer()
-            
+            // ✅ Right side - Post button
             Button {
                 Task { await viewModel.submitVisit() }
             } label: {
@@ -333,6 +553,11 @@ struct AddVisitView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(colorScheme == .dark ? Color.black : Color.white)
+        .overlay {
+            // ✅ Centered title
+            Text("Add Visit")
+                .font(.system(size: 18, weight: .bold))
+        }
     }
     
     private var photosSection: some View {
@@ -349,8 +574,20 @@ struct AddVisitView: View {
                 
                 if !viewModel.loadedImages.isEmpty {
                     Button {
+                        viewModel.cleanupAllTempFiles()
+                        viewModel.shouldIgnorePhotoChanges = true  // Prevent reload
                         viewModel.selectedPhotos = []
                         viewModel.loadedImages = []
+                        viewModel.uploadedPhotoURLs = []
+                        
+                        // ✅ FIX 1: Reset flag after clearing all
+                        Task {
+                            try? await Task.sleep(nanoseconds: 100_000_000)
+                            await MainActor.run {
+                                viewModel.shouldIgnorePhotoChanges = false
+                                print("✅ Flag reset after Clear All")
+                            }
+                        }
                     } label: {
                         Text("Clear All")
                             .font(.system(size: 14, weight: .medium))
@@ -380,7 +617,7 @@ struct AddVisitView: View {
                             .foregroundColor(.secondary)
                     }
                     .frame(maxWidth: .infinity)
-                    .frame(height: 180)  // ✅ BIGGER
+                    .frame(height: 213)  // CHANGED: Match image height
                     .background(colorScheme == .dark ? Color(white: 0.15) : Color.white)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
@@ -388,28 +625,64 @@ struct AddVisitView: View {
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 12) {
-                        ForEach(Array(viewModel.loadedImages.enumerated()), id: \.offset) { index, image in
+                        ForEach(viewModel.loadedImages, id: \.id) { item in  // CHANGED: Use UUID as id
                             ZStack(alignment: .topTrailing) {
-                                Image(uiImage: image)
-                                    .resizable()
-                                    .scaledToFill()
-                                    .frame(width: 160, height: 213)  // ✅ 3:4 ratio (iPhone photos)
-                                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                                    .onTapGesture {
-                                        viewModel.selectedPhotoIndex = index
+                                // ✅ FIX 2: Image with tap gesture
+                                ZStack {
+                                    Image(uiImage: item.image)
+                                        .resizable()
+                                        .scaledToFill()
+                                        .frame(width: 160, height: 213)
+                                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                                    
+                                    // Progress overlay
+                                    if let progress = viewModel.uploadProgress[item.id], progress < 1.0 {
+                                        ZStack {
+                                            Color.black.opacity(0.5)
+                                            
+                                            VStack(spacing: 8) {
+                                                ProgressView(value: progress)
+                                                    .progressViewStyle(LinearProgressViewStyle(tint: .white))
+                                                    .frame(width: 100)
+                                                
+                                                Text("\(Int(progress * 100))%")
+                                                    .font(.system(size: 13, weight: .semibold))
+                                                    .foregroundColor(.white)
+                                            }
+                                        }
+                                        .clipShape(RoundedRectangle(cornerRadius: 12))
                                     }
-                                
-                                Button {
-                                    viewModel.loadedImages.remove(at: index)
-                                    if index < viewModel.selectedPhotos.count {
-                                        viewModel.selectedPhotos.remove(at: index)
-                                    }
-                                } label: {
-                                    Image(systemName: "xmark.circle.fill")
-                                        .font(.system(size: 24))  // ✅ BIGGER
-                                        .foregroundColor(.white)
-                                        .background(Circle().fill(Color.black.opacity(0.6)))
                                 }
+                                .contentShape(RoundedRectangle(cornerRadius: 12))
+                                .onTapGesture {
+                                    if viewModel.uploadProgress[item.id] == nil || viewModel.uploadProgress[item.id] == 1.0 {
+                                        if let index = viewModel.loadedImages.firstIndex(where: { $0.id == item.id }) {
+                                            viewModel.selectedPhotoIndex = index
+                                        }
+                                    }
+                                }
+                                
+                                // ✅ Remove button - white stroke only
+                                Button {
+                                    viewModel.removePhoto(withId: item.id)
+                                } label: {
+                                    ZStack {
+                                        // Larger tap target (invisible)
+                                        Circle()
+                                            .fill(.clear)
+                                            .frame(width: 44, height: 44)
+                                        
+                                        // Visual: white stroke X only
+                                        Image(systemName: "xmark")
+                                            .font(.system(size: 13, weight: .bold))
+                                            .foregroundColor(.white)
+                                            .shadow(color: .black.opacity(0.6), radius: 1, x: 0, y: 0)
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                                .zIndex(10)
+                                .disabled(viewModel.uploadProgress[item.id] != nil && viewModel.uploadProgress[item.id] != 1.0)
+                                .opacity((viewModel.uploadProgress[item.id] != nil && viewModel.uploadProgress[item.id] != 1.0) ? 0.3 : 1.0)
                                 .padding(8)
                             }
                         }
@@ -611,8 +884,8 @@ struct AddVisitView: View {
             Color.black.ignoresSafeArea()
             
             TabView(selection: $viewModel.selectedPhotoIndex) {
-                ForEach(Array(viewModel.loadedImages.enumerated()), id: \.offset) { i, image in
-                    Image(uiImage: image)
+                ForEach(Array(viewModel.loadedImages.enumerated()), id: \.offset) { i, item in
+                    Image(uiImage: item.image)
                         .resizable()
                         .scaledToFit()
                         .tag(i as Int?)

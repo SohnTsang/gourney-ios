@@ -39,6 +39,9 @@
     "Add Photos" : {
 
     },
+    "Add the first photo here!" : {
+
+    },
     "Add Visit" : {
 
     },
@@ -798,6 +801,9 @@
     "Available!" : {
 
     },
+    "Back" : {
+
+    },
     "Back to Sign Up" : {
 
     },
@@ -1078,9 +1084,6 @@
 
     },
     "Complete Your Profile" : {
-
-    },
-    "Confirm Location" : {
 
     },
     "Confirm Password" : {
@@ -1493,6 +1496,9 @@
     "Lists" : {
 
     },
+    "Loading place info..." : {
+
+    },
     "Loading visits..." : {
 
     },
@@ -1811,9 +1817,6 @@
     "Post" : {
 
     },
-    "Posted!" : {
-
-    },
     "Posting your visit..." : {
 
     },
@@ -2022,9 +2025,6 @@
 
     },
     "Who can see this?" : {
-
-    },
-    "Your visit has been shared!" : {
 
     }
   },

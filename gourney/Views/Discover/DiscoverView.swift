@@ -26,6 +26,7 @@ struct DiscoverView: View {
     @State private var mapRefreshTask: Task<Void, Never>?
     @State private var selectedPinId: String?
     @State private var suppressRegionRefresh = false
+    @State private var isResearching = false  // ✅ NEW: Prevent zoom during research
     @State private var annotations: [PinAnnotation] = []
     @State private var showListView = false
     @State private var showResearchButton = false
@@ -33,6 +34,7 @@ struct DiscoverView: View {
     // ✅ NEW: Clustering state
     @State private var clusterItems: [ClusterItem] = []
     @State private var lastClusteringRegion: MKCoordinateRegion?
+    @State private var clusterDebounceTask: Task<Void, Never>?
     
     var body: some View {
         
@@ -48,6 +50,7 @@ struct DiscoverView: View {
                     mapView
                         .id("mapView")
                         .onMapCameraChange { context in
+                            guard !isResearching else { return }  // ✅ Don't update during research
                             region = context.region
                             handleMapRegionChange(context.region.center)
                             
@@ -91,7 +94,7 @@ struct DiscoverView: View {
             .navigationBarHidden(true)
             .sheet(isPresented: $viewModel.showPlaceInfo) {
                 if let place = viewModel.selectedPlace {
-                    PlaceInfoCard(place: place)
+                    PlaceInfoCard(place: place, viewModel: viewModel)
                 }
             }
             .onChange(of: viewModel.showPlaceInfo) { _, isShowing in
@@ -249,9 +252,35 @@ struct DiscoverView: View {
                 .frame(height: 110)
             
             Button(action: {
+                // ✅ LOG: Zoom level BEFORE search
+                print("🔍 [Search This Area] CLICKED")
+                print("   BEFORE - Center: \(String(format: "%.6f", region.center.latitude)), \(String(format: "%.6f", region.center.longitude))")
+                print("   BEFORE - Span: latΔ=\(String(format: "%.6f", region.span.latitudeDelta)), lngΔ=\(String(format: "%.6f", region.span.longitudeDelta))")
+                print("   BEFORE - Zoom Level: \(String(format: "%.2f", log2(360.0 / region.span.longitudeDelta)))")
+                
                 showResearchButton = false
+                isResearching = true  // ✅ Block map updates
+                
+                let savedRegion = region  // ✅ Save EXACT region state
+                
                 Task {
-                    await viewModel.fetchBeenToPlaces(in: region)
+                    await viewModel.fetchBeenToPlaces(in: savedRegion)
+                    
+                    await MainActor.run {
+                        // ✅ Force restore saved region (ignore any changes during fetch)
+                        region = savedRegion
+                        mapPosition = .region(savedRegion)
+                        
+                        print("   ✅ RESTORED - Center: \(String(format: "%.6f", savedRegion.center.latitude)), \(String(format: "%.6f", savedRegion.center.longitude))")
+                        print("   ✅ RESTORED - Span: latΔ=\(String(format: "%.6f", savedRegion.span.latitudeDelta)), lngΔ=\(String(format: "%.6f", savedRegion.span.longitudeDelta))")
+                        print("   ✅ RESTORED - Zoom Level: \(String(format: "%.2f", log2(360.0 / savedRegion.span.longitudeDelta)))")
+                        
+                        updateAnnotations()  // Update pins
+                        
+                        isResearching = false  // ✅ Unblock AFTER everything done
+                        
+                        print("   ✅ Search complete\n")
+                    }
                 }
             }) {
                 HStack(spacing: 6) {
@@ -487,19 +516,26 @@ struct DiscoverView: View {
         // Check if we should re-cluster (zoom changed significantly)
         if let lastRegion = lastClusteringRegion {
             let spanChange = abs(newRegion.span.latitudeDelta - lastRegion.span.latitudeDelta)
-            let threshold = lastRegion.span.latitudeDelta * 0.5  // ✅ CHANGED: 50% change (was 30%)
+            let threshold = lastRegion.span.latitudeDelta * 0.8  // ✅ Increased: Less frequent updates
             
             guard spanChange > threshold else { return }
         }
         
-        // Perform clustering
-        updateClusters(for: newRegion)
+        // ✅ PERFORMANCE: Debounce clustering - wait for zoom to settle
+        clusterDebounceTask?.cancel()
+        clusterDebounceTask = Task {
+            try? await Task.sleep(nanoseconds: 400_000_000) // ✅ 0.4s - let zoom animation finish
+            guard !Task.isCancelled else { return }
+            
+            await MainActor.run {
+                updateClusters(for: newRegion)
+            }
+        }
     }
     
     /// Perform clustering on current annotations
     private func updateClusters(for region: MKCoordinateRegion) {
         guard !annotations.isEmpty else {
-            // ✅ FIX: Properly clear old clusters
             if !clusterItems.isEmpty {
                 clusterItems.removeAll(keepingCapacity: false)
                 lastClusteringRegion = nil
@@ -507,32 +543,12 @@ struct DiscoverView: View {
             return
         }
         
-        // ✅ FIX: Don't log memory on every clustering
-        // Only log on significant changes
-        let shouldLog = lastClusteringRegion == nil ||
-                       (lastClusteringRegion != nil &&
-                        abs(region.span.latitudeDelta - lastClusteringRegion!.span.latitudeDelta) >
-                        lastClusteringRegion!.span.latitudeDelta * 1.0)
-        
-        if shouldLog {
-            MemoryDebugHelper.shared.logMemory(tag: "🔄 Before Clustering")
-        }
-        
-        // ✅ FIX: Clear old clusters BEFORE creating new ones
-        clusterItems.removeAll(keepingCapacity: false)
-        clusterItems = []  // Force complete dealloc
-
         // Use clustering helper
         let clusters = MapClusteringHelper.clusterPins(annotations, in: region)
 
-        // Update state
+        // Update state smoothly
         clusterItems = clusters
         lastClusteringRegion = region
-        
-        
-        if shouldLog {
-            MemoryDebugHelper.shared.logMemory(tag: "✅ After Clustering")
-        }
     }
     
     /// Handle cluster tap - zoom into cluster area
@@ -557,20 +573,18 @@ struct DiscoverView: View {
             maxLng = max(maxLng, pin.coordinate.longitude)
         }
         
-        // ✅ FIX: Calculate distance between furthest pins
         let latDiff = maxLat - minLat
         let lngDiff = maxLng - minLng
         
-        // ✅ FIX: If pins are VERY close, zoom in more aggressively
-        let minZoomSpan = 0.005  // ~500m view
-        let shouldZoomClose = latDiff < 0.001 && lngDiff < 0.001  // Pins within ~100m
+        // Zoom aggressively to separate pins immediately
+        let minZoomSpan = 0.003  // ~300m view
+        let shouldZoomClose = latDiff < 0.001 && lngDiff < 0.001
         
-        // Create region with adaptive padding
         let centerLat = (minLat + maxLat) / 2
         let centerLng = (minLng + maxLng) / 2
         
-        // ✅ FIX: Use smaller padding for tight clusters
-        let paddingMultiplier = shouldZoomClose ? 3.0 : 1.8
+        // Use aggressive zoom for tight clusters
+        let paddingMultiplier = shouldZoomClose ? 3.0 : 2.0
         let spanLat = max(latDiff * paddingMultiplier, minZoomSpan)
         let spanLng = max(lngDiff * paddingMultiplier, minZoomSpan)
         
@@ -585,41 +599,15 @@ struct DiscoverView: View {
         print("   🔍 Zooming to span: lat=\(String(format: "%.5f", spanLat)), lng=\(String(format: "%.5f", spanLng))")
         
         // Animate zoom
-        withAnimation(.easeInOut(duration: 0.5)) {
+        withAnimation(.easeInOut(duration: 0.4)) {
             region = newRegion
             mapPosition = .region(newRegion)
         }
         
-        // ✅ FIX: Re-cluster after zoom completes
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+        // Re-cluster once after zoom completes (NO RECURSION)
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 500_000_000)
             updateClusters(for: newRegion)
-            
-            // ✅ Check if still clustered - if yes, zoom again recursively
-            let stillClustered = self.clusterItems.contains { item in
-                if case .cluster(let c) = item {
-                    return c.pinIds.contains(where: { cluster.pinIds.contains($0) })
-                }
-                return false
-            }
-            
-            if stillClustered && spanLat > 0.0001 {  // Prevent infinite loop
-                print("   🔁 Cluster still present, zooming again...")
-                
-                // Find the new cluster and tap it again
-                for item in self.clusterItems {
-                    if case .cluster(let newCluster) = item {
-                        if newCluster.pinIds.contains(where: { cluster.pinIds.contains($0) }) {
-                            // Recursively zoom into this cluster
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                                self.handleClusterTap(newCluster)
-                            }
-                            break
-                        }
-                    }
-                }
-            } else {
-                print("   ✅ Pins now separate!")
-            }
         }
     }
     
@@ -647,8 +635,9 @@ struct DiscoverView: View {
         guard selectedPinId != item.id else { return }
         
         selectedPinId = item.id
-        updateClusters(for: region)  // Re-render to show highlighted pin
-
+        // ✅ FIX: Don't call updateClusters - it refreshes entire map!
+        // The pin will highlight automatically via isHighlighted binding
+        
         // Pan map if needed
         let screenHeight = UIScreen.main.bounds.height
         let cardHeight = screenHeight * 0.4
@@ -663,6 +652,7 @@ struct DiscoverView: View {
                 longitude: item.coordinate.longitude
             )
             
+            suppressRegionRefresh = true  // ✅ Prevent research button from showing
             withAnimation(.easeOut(duration: 0.3)) {
                 let newRegion = MKCoordinateRegion(
                     center: newCenter,
@@ -670,6 +660,11 @@ struct DiscoverView: View {
                 )
                 region = newRegion
                 mapPosition = .region(newRegion)
+            }
+            
+            // Re-enable after animation
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                suppressRegionRefresh = false
             }
         }
         
@@ -788,10 +783,6 @@ struct DiscoverView: View {
             return
         }
         
-        MemoryDebugHelper.shared.logMemory(tag: "📌 Before (\(annotations.count) pins)")
-        
-        annotations.removeAll(keepingCapacity: false)
-        annotations = []  // Force release
         var newPins: [PinAnnotation] = []
         newPins.reserveCapacity(50)
         
@@ -828,10 +819,8 @@ struct DiscoverView: View {
         
         annotations = newPins
         
-        // ✅ NEW: Trigger clustering after annotation update
+        // ✅ Trigger clustering after annotation update
         updateClusters(for: region)
-        
-        MemoryDebugHelper.shared.logMemory(tag: "📌 After (\(annotations.count) pins)")
     }
     
     private func loadData() async {
@@ -1075,4 +1064,3 @@ struct ErrorBanner: View {
 #Preview {
     DiscoverView()
 }
-

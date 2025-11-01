@@ -1,14 +1,16 @@
 // Views/Discover/PlaceInfoCard.swift
 // ✅ Uses shared PlaceDetailSheet component
+// ✅ Efficient single-place refresh after visit posted
 
 import SwiftUI
 
 struct PlaceInfoCard: View {
     let place: Place
+    @ObservedObject var viewModel: DiscoverViewModel
     var onDismiss: (() -> Void)?
-    var onRefreshNeeded: (() -> Void)?
     
     @State private var showAddVisit = false
+    @State private var refreshTrigger = UUID()  // ✅ Trigger to reload PlaceDetailSheet
     
     var body: some View {
         PlaceDetailSheet(
@@ -26,17 +28,21 @@ struct PlaceInfoCard: View {
             },
             onDismiss: onDismiss
         )
-        .sheet(isPresented: $showAddVisit) {
-            AddVisitView(prefilledPlace: PlaceSearchResult(from: place))
-        }
-        .onChange(of: showAddVisit) { oldValue, newValue in
-            if oldValue == true && newValue == false {
-                // Refresh after adding visit
-                Task {
-                    try? await Task.sleep(nanoseconds: 500_000_000)
-                    onRefreshNeeded?()
+        .id(refreshTrigger)  // ✅ Force reload when refreshTrigger changes
+        .fullScreenCover(isPresented: $showAddVisit) {
+            AddVisitView(
+                prefilledPlace: PlaceSearchResult(from: place),
+                showBackButton: true,
+                onVisitPosted: { placeId in
+                    // ✅ Refresh place data and reload sheet
+                    Task {
+                        await viewModel.refreshPlace(placeId: placeId)
+                        await MainActor.run {
+                            refreshTrigger = UUID()  // ✅ Trigger sheet reload
+                        }
+                    }
                 }
-            }
+            )
         }
     }
 }

@@ -12,21 +12,22 @@ struct ClusterPinView: View {
     let isVisited: Bool
     let onTap: () -> Void
     
+    // ✅ PERFORMANCE: Cache gradient computation
     private var pinGradient: LinearGradient {
-        if isVisited {
-            return LinearGradient(
-                colors: [Color(red: 1.0, green: 0.4, blue: 0.4), Color(red: 0.95, green: 0.3, blue: 0.35)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        } else {
-            return LinearGradient(
-                colors: [Color(red: 1.0, green: 0.5, blue: 0.3), Color(red: 1.0, green: 0.4, blue: 0.2)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        }
+        isVisited ? visitedGradient : unvisitedGradient
     }
+    
+    private let visitedGradient = LinearGradient(
+        colors: [Color(red: 1.0, green: 0.4, blue: 0.4), Color(red: 0.95, green: 0.3, blue: 0.35)],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+    )
+    
+    private let unvisitedGradient = LinearGradient(
+        colors: [Color(red: 1.0, green: 0.5, blue: 0.3), Color(red: 1.0, green: 0.4, blue: 0.2)],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+    )
     
     var body: some View {
         Button(action: onTap) {

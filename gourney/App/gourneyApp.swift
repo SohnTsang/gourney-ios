@@ -3,10 +3,6 @@ import SwiftUI
 @main
 struct GourneyApp: App {
     init() {
-            #if DEBUG
-            // Start monitoring every 3 seconds
-            MemoryDebugHelper.shared.startMonitoring(interval: 3.0)
-            #endif
         }
     @StateObject private var authManager = AuthManager.shared
     

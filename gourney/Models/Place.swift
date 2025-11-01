@@ -1,5 +1,5 @@
 // Models/Place.swift
-// DEBUG VERSION - Manual decoder with logging
+// ✅ FIXED: Use correct DB field names
 
 import Foundation
 import CoreLocation
@@ -19,9 +19,10 @@ struct Place: Identifiable {
     let photoUrls: [String]?
     let openNow: Bool?
     let priceLevel: Int?
-    let rating: Double?
+    let avgRating: Double?        // ✅ FIXED: was 'rating'
+    let visitCount: Int?           // ✅ ADDED
     let userRatingsTotal: Int?
-    let phoneNumber: String?
+    let phone: String?             // ✅ FIXED: was 'phoneNumber'
     let website: String?
     let openingHours: [String]?
     let createdAt: String?
@@ -31,23 +32,27 @@ struct Place: Identifiable {
         CLLocationCoordinate2D(latitude: lat, longitude: lng)
     }
     
+    // ✅ For backwards compatibility
+    var rating: Double? { avgRating }
+    var phoneNumber: String? { phone }
+    
     var displayName: String {
         let locale = Locale.current.identifier
         
         if locale.hasPrefix("ja") {
-            if let ja = nameJa { return ja }
-            if let en = nameEn { return en }
-            if let zh = nameZh { return zh }
+            if let ja = nameJa, !ja.isEmpty { return ja }
+            if let en = nameEn, !en.isEmpty { return en }
+            if let zh = nameZh, !zh.isEmpty { return zh }
         }
         else if locale.hasPrefix("zh") {
-            if let zh = nameZh { return zh }
-            if let en = nameEn { return en }
-            if let ja = nameJa { return ja }
+            if let zh = nameZh, !zh.isEmpty { return zh }
+            if let en = nameEn, !en.isEmpty { return en }
+            if let ja = nameJa, !ja.isEmpty { return ja }
         }
         else {
-            if let en = nameEn { return en }
-            if let ja = nameJa { return ja }
-            if let zh = nameZh { return zh }
+            if let en = nameEn, !en.isEmpty { return en }
+            if let ja = nameJa, !ja.isEmpty { return ja }
+            if let zh = nameZh, !zh.isEmpty { return zh }
         }
         
         return "Unknown Place"
@@ -58,28 +63,19 @@ struct Place: Identifiable {
     }
 }
 
-// Manual Codable implementation with DEBUG logging
+// Manual Codable implementation
 extension Place: Codable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         
-        // Decode required fields
         id = try container.decode(String.self, forKey: .id)
         provider = try container.decode(PlaceProvider.self, forKey: .provider)
         lat = try container.decode(Double.self, forKey: .lat)
         lng = try container.decode(Double.self, forKey: .lng)
         
-        // Decode optional fields WITH LOGGING
         googlePlaceId = try? container.decodeIfPresent(String.self, forKey: .googlePlaceId)
         applePlaceId = try? container.decodeIfPresent(String.self, forKey: .applePlaceId)
-        
-        // NAME FIELDS - with debug logging
-        if let name = try? container.decodeIfPresent(String.self, forKey: .nameEn) {
-            nameEn = name
-        } else {
-            nameEn = nil
-        }
-        
+        nameEn = try? container.decodeIfPresent(String.self, forKey: .nameEn)
         nameJa = try? container.decodeIfPresent(String.self, forKey: .nameJa)
         nameZh = try? container.decodeIfPresent(String.self, forKey: .nameZh)
         formattedAddress = try? container.decodeIfPresent(String.self, forKey: .formattedAddress)
@@ -87,9 +83,10 @@ extension Place: Codable {
         photoUrls = try? container.decodeIfPresent([String].self, forKey: .photoUrls)
         openNow = try? container.decodeIfPresent(Bool.self, forKey: .openNow)
         priceLevel = try? container.decodeIfPresent(Int.self, forKey: .priceLevel)
-        rating = try? container.decodeIfPresent(Double.self, forKey: .rating)
+        avgRating = try? container.decodeIfPresent(Double.self, forKey: .avgRating)
+        visitCount = try? container.decodeIfPresent(Int.self, forKey: .visitCount)
         userRatingsTotal = try? container.decodeIfPresent(Int.self, forKey: .userRatingsTotal)
-        phoneNumber = try? container.decodeIfPresent(String.self, forKey: .phoneNumber)
+        phone = try? container.decodeIfPresent(String.self, forKey: .phone)
         website = try? container.decodeIfPresent(String.self, forKey: .website)
         openingHours = try? container.decodeIfPresent([String].self, forKey: .openingHours)
         createdAt = try? container.decodeIfPresent(String.self, forKey: .createdAt)
@@ -97,30 +94,17 @@ extension Place: Codable {
     }
     
     enum CodingKeys: String, CodingKey {
-        case id
-        case provider
-        case googlePlaceId
-        case applePlaceId
-        case nameEn
-        case nameJa
-        case nameZh
-        case lat
-        case lng
-        case formattedAddress
-        case categories
-        case photoUrls
-        case openNow
-        case priceLevel
-        case rating
+        case id, provider, googlePlaceId, applePlaceId
+        case nameEn, nameJa, nameZh
+        case lat, lng, formattedAddress, categories, photoUrls
+        case openNow, priceLevel
+        case avgRating       // ✅ FIXED
+        case visitCount      // ✅ ADDED
         case userRatingsTotal
-        case phoneNumber
-        case website
-        case openingHours
-        case createdAt
-        case updatedAt
+        case phone           // ✅ FIXED
+        case website, openingHours, createdAt, updatedAt
     }
 }
-
 
 enum PlaceProvider: String, Codable {
     case google, apple, manual, ugc
@@ -164,16 +148,18 @@ struct PlaceSearchResult: Codable, Identifiable, Equatable {
     
     var displayName: String {
         let locale = Locale.current.identifier
-        if locale.hasPrefix("ja"), let ja = nameJa { return ja }
-        if locale.hasPrefix("zh"), let zh = nameZh { return zh }
-        return nameEn ?? nameJa ?? nameZh ?? "Unknown"
+        if locale.hasPrefix("ja"), let ja = nameJa, !ja.isEmpty { return ja }
+        if locale.hasPrefix("zh"), let zh = nameZh, !zh.isEmpty { return zh }
+        if let en = nameEn, !en.isEmpty { return en }
+        if let ja = nameJa, !ja.isEmpty { return ja }
+        if let zh = nameZh, !zh.isEmpty { return zh }
+        return "Unknown"
     }
     
     static func == (lhs: PlaceSearchResult, rhs: PlaceSearchResult) -> Bool {
         lhs.id == rhs.id
     }
     
-    // Custom initializer for manual creation (Apple MapKit)
     init(
         source: PlaceSource,
         googlePlaceId: String?,
@@ -207,7 +193,6 @@ struct PlaceSearchResult: Codable, Identifiable, Equatable {
         self.appleFullData = appleFullData
     }
     
-    // Custom decoder
     enum CodingKeys: String, CodingKey {
         case source, googlePlaceId, applePlaceId, nameEn, nameJa, nameZh
         case lat, lng, formattedAddress, categories, photoUrls
@@ -232,10 +217,7 @@ struct PlaceSearchResult: Codable, Identifiable, Equatable {
         self.dbPlaceId = try? container.decodeIfPresent(String.self, forKey: .dbPlaceId)
         self.appleFullData = try? container.decodeIfPresent(ApplePlaceData.self, forKey: .appleFullData)
     }
-}
-
-// Add to bottom of Place.swift
-extension PlaceSearchResult {
+    
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(source, forKey: .source)
@@ -266,4 +248,92 @@ struct SearchPlacesRequest: Encodable {
 struct SearchPlacesResponse: Codable {
     let results: [PlaceSearchResult]
     let count: Int
+}
+
+// ✅ Keep CompletePlace - it's correct!
+struct CompletePlace {
+    let id: String
+    let provider: String
+    let providerPlaceId: String?
+    let nameEn: String?
+    let nameJa: String?
+    let nameZh: String?
+    let formattedAddress: String?
+    let phone: String?
+    let website: String?
+    let postalCode: String?
+    let city: String?
+    let ward: String?
+    let country: String?
+    let countryCode: String?
+    let lat: Double
+    let lng: Double
+    let categories: [String]?
+    let rating: Double?
+    let visitCount: Int?
+    
+    init(from response: PlaceGetResponse) {
+        self.id = response.id
+        self.provider = response.provider
+        self.providerPlaceId = response.providerPlaceId
+        self.nameEn = response.nameEn
+        self.nameJa = response.nameJa
+        self.nameZh = response.nameZh
+        
+        if let formatted = response.attributes?.formattedAddress, !formatted.isEmpty {
+            self.formattedAddress = formatted
+        } else if let addr = response.address, !addr.isEmpty {
+            self.formattedAddress = addr
+        } else {
+            let parts = [response.ward, response.city, response.prefectureName]
+                .compactMap { $0 }
+                .filter { !$0.isEmpty }
+            self.formattedAddress = parts.isEmpty ? nil : parts.joined(separator: ", ")
+        }
+        
+        if let ph = response.phone, !ph.isEmpty {
+            self.phone = ph
+        } else {
+            self.phone = response.attributes?.phone
+        }
+        
+        if let web = response.website, !web.isEmpty {
+            self.website = web
+        } else {
+            self.website = response.attributes?.website
+        }
+        
+        self.postalCode = response.postalCode
+        self.city = response.city
+        self.ward = response.ward
+        self.country = response.country
+        self.countryCode = response.countryCode
+        self.lat = response.lat
+        self.lng = response.lng
+        self.categories = response.categories
+        self.rating = response.avgRating
+        self.visitCount = response.visitCount
+    }
+    
+    var displayName: String {
+        let locale = Locale.current.identifier
+        
+        if locale.hasPrefix("ja") {
+            if let ja = nameJa, !ja.isEmpty { return ja }
+            if let en = nameEn, !en.isEmpty { return en }
+            if let zh = nameZh, !zh.isEmpty { return zh }
+        }
+        else if locale.hasPrefix("zh") {
+            if let zh = nameZh, !zh.isEmpty { return zh }
+            if let en = nameEn, !en.isEmpty { return en }
+            if let ja = nameJa, !ja.isEmpty { return ja }
+        }
+        else {
+            if let en = nameEn, !en.isEmpty { return en }
+            if let ja = nameJa, !ja.isEmpty { return ja }
+            if let zh = nameZh, !zh.isEmpty { return zh }
+        }
+        
+        return "Unknown Place"
+    }
 }

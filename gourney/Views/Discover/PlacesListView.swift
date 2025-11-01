@@ -265,36 +265,4 @@ struct PlaceListItem: Identifiable, Hashable {
     }
 }
 
-// MARK: - Preview
 
-#Preview {
-    let samplePlaces = [
-        PlaceListItem(
-            from: Place(
-                id: "1",
-                provider: .google,
-                googlePlaceId: "test1",
-                applePlaceId: nil,
-                nameEn: "Ichiran Ramen",
-                nameJa: "一蘭ラーメン",
-                nameZh: nil,
-                lat: 35.6762,
-                lng: 139.6503,
-                formattedAddress: "Shibuya, Tokyo",
-                categories: ["ramen", "japanese"],
-                photoUrls: ["https://example.com/photo1.jpg"],
-                openNow: true,
-                priceLevel: 2,
-                rating: 4.5,
-                userRatingsTotal: 1234,
-                phoneNumber: nil,
-                website: nil,
-                openingHours: nil,
-                createdAt: nil,
-                updatedAt: nil
-            )
-        )
-    ]
-    
-    PlacesListView(places: samplePlaces) { _ in }
-}

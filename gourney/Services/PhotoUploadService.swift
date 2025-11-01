@@ -184,6 +184,30 @@ class PhotoUploadService {
                     let delay = UInt64(attempt * 1_000_000_000) // 1s, 2s, 3s
                     try? await Task.sleep(nanoseconds: delay)
                 }
+            } catch PhotoUploadError.uploadFailed(let statusCode) where (statusCode == 401 || statusCode == 403) {
+                // Token expired - try refresh
+                print("⚠️ Upload failed with \(statusCode) (token expired)")
+                
+                if attempt < maxRetries {
+                    if let refreshHandler = SupabaseClient.shared.authRefreshHandler {
+                        print("🔄 Refreshing token...")
+                        let refreshed = await refreshHandler()
+                        
+                        if refreshed {
+                            print("✅ Token refreshed, retrying upload...")
+                            let delay = UInt64(500_000_000) // 0.5s
+                            try? await Task.sleep(nanoseconds: delay)
+                            continue
+                        } else {
+                            print("❌ Token refresh failed")
+                            throw PhotoUploadError.notAuthenticated
+                        }
+                    } else {
+                        throw PhotoUploadError.notAuthenticated
+                    }
+                } else {
+                    throw PhotoUploadError.uploadFailed(statusCode: statusCode)
+                }
             } catch {
                 // Other errors don't retry
                 throw error
@@ -203,9 +227,10 @@ class PhotoUploadService {
         // Get file size without loading to memory
         let fileSize = try FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? Int ?? 0
         
-        // Generate unique filename
+        // Generate unique filename with UUID to prevent duplicates
         let timestamp = Int(Date().timeIntervalSince1970 * 1000)
-        let filename = "\(timestamp)-\(index).jpg"
+        let uniqueId = UUID().uuidString.prefix(8)  // First 8 chars of UUID
+        let filename = "\(timestamp)-\(index)-\(uniqueId).jpg"
         let fullPath = "\(userId)/\(filename)"
         
         progressHandler?(0.5)

@@ -11,9 +11,9 @@ struct UserLocationView: View {
     @State private var pulseScale: CGFloat = 1.0
     @State private var pulseOpacity: Double = 0.6
     
-    // ✅ PERFORMANCE: Use constants
+    // ✅ PERFORMANCE: Use constants and reduce animation frequency
     private let dotSize: CGFloat = 16
-    private let pulseAnimationDuration: Double = 2.0
+    private let pulseAnimationDuration: Double = 3.0  // Slower = less CPU
     
     var body: some View {
         ZStack {
