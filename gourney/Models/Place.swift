@@ -91,18 +91,33 @@ extension Place: Codable {
         openingHours = try? container.decodeIfPresent([String].self, forKey: .openingHours)
         createdAt = try? container.decodeIfPresent(String.self, forKey: .createdAt)
         updatedAt = try? container.decodeIfPresent(String.self, forKey: .updatedAt)
+                
+        // DEBUG LOGS
+        print("🔍 [Place Decode] Name: \(nameEn ?? "unknown")")
+        print("   avgRating decoded: \(avgRating?.description ?? "nil")")
+        print("   visitCount decoded: \(visitCount?.description ?? "nil")")
+        print("   formattedAddress decoded: \(formattedAddress ?? "nil")")
+
+        
+        
     }
     
     enum CodingKeys: String, CodingKey {
-        case id, provider, googlePlaceId, applePlaceId
+        case id, provider
+        case googlePlaceId = "google_place_id"
+        case applePlaceId = "apple_place_id"
         case nameEn, nameJa, nameZh
-        case lat, lng, formattedAddress, categories, photoUrls
+        case lat, lng
+        case formattedAddress = "address"       // ✅ Backend sends "address"
+        case categories, photoUrls
         case openNow, priceLevel
-        case avgRating       // ✅ FIXED
-        case visitCount      // ✅ ADDED
+        case avgRating         // ✅ snake_case
+        case visitCount      // ✅ Add mapping
         case userRatingsTotal
-        case phone           // ✅ FIXED
-        case website, openingHours, createdAt, updatedAt
+        case phone                              // ✅ Already correct
+        case website, openingHours
+        case createdAt = "created_at"           // ✅ snake_case
+        case updatedAt = "updated_at"           // ✅ snake_case
     }
 }
 

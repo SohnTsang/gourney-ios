@@ -23,6 +23,7 @@ struct SearchPlaceOverlay: View {
     @FocusState private var isFocused: Bool
     @State private var selectedResult: PlaceSearchResult?
     @State private var showPlaceInfo = false
+    @State private var showFilterSheet = false
     
     var body: some View {
         VStack(spacing: 0) {
@@ -54,6 +55,10 @@ struct SearchPlaceOverlay: View {
                 }
                 Spacer()
             }
+            
+            // Bottom safe area padding for tab bar
+            Spacer()
+                .frame(height: 90)
         }
         .background(colorScheme == .dark ? Color(.systemBackground) : Color(.systemGroupedBackground))
         .ignoresSafeArea(.all, edges: [.bottom])
@@ -68,6 +73,20 @@ struct SearchPlaceOverlay: View {
                 )
                 .presentationDetents([.large])
             }
+        }
+        .sheet(isPresented: $showFilterSheet) {
+            VStack(spacing: 20) {
+                Text("Filters")
+                    .font(.system(size: 20, weight: .semibold))
+                    .padding(.top, 20)
+                
+                Text("Filter options coming soon")
+                    .font(.system(size: 16))
+                    .foregroundColor(.secondary)
+                
+                Spacer()
+            }
+            .presentationDetents([.medium])
         }
         .onAppear {
             isFocused = true
@@ -111,11 +130,22 @@ struct SearchPlaceOverlay: View {
                             .foregroundColor(.secondary)
                     }
                 }
+                
+                // Filter button - appears only when results exist
+                if !viewModel.displayedResults.isEmpty {
+                    Button {
+                        showFilterSheet = true
+                    } label: {
+                        Image(systemName: "line.3.horizontal.decrease.circle.fill")
+                            .font(.system(size: 20))
+                            .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
+                    }
+                }
             }
             .padding(.horizontal, 14)
-            .padding(.vertical, 12)
+            .padding(.vertical, 10)
             .background(colorScheme == .dark ? Color(white: 0.15) : Color(white: 0.95))
-            .cornerRadius(12)
+            .cornerRadius(20)
         }
     }
     
@@ -339,15 +369,27 @@ class SearchPlaceViewModel: ObservableObject {
                         continue
                     }
                     
-                    // ✅ ADD: Check by location (within 50m radius)
+                    // ✅ Check by location + name (same location with different names is OK)
                     let isDuplicate = combinedResults.contains { dbResult in
                         let distance = CLLocation(latitude: dbResult.lat, longitude: dbResult.lng)
                             .distance(from: CLLocation(latitude: appleResult.lat, longitude: appleResult.lng))
-                        return distance < 50 // Within 50 meters
+                        
+                        // Only duplicate if BOTH location is close AND name is similar
+                        guard distance < 50 else { return false }
+                        
+                        let normalizedApple = appleResult.name.lowercased()
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                            .replacingOccurrences(of: " ", with: "")
+                        
+                        let normalizedDb = dbResult.displayName.lowercased()
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                            .replacingOccurrences(of: " ", with: "")
+                        
+                        return normalizedApple == normalizedDb
                     }
                     
                     if isDuplicate {
-                        print("⏭️ [DEDUP] Skipping Apple result (same location): \(appleResult.name)")
+                        print("⏭️ [DEDUP] Skipping Apple result (same location + name): \(appleResult.name)")
                         continue
                     }
                     

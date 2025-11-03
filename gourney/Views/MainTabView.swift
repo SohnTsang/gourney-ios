@@ -104,7 +104,7 @@ struct FeedPlaceholderView: View {
 
 struct ProfilePlaceholderView: View {
     @StateObject private var authManager = AuthManager.shared
-    
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 20) {
@@ -119,6 +119,7 @@ struct ProfilePlaceholderView: View {
                 Text("Coming in Day 7")
                     .font(.caption)
                     .foregroundColor(.secondary)
+             
                 
                 // Show current user info
                 if let user = authManager.currentUser {

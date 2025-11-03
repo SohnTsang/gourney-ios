@@ -13,6 +13,16 @@
     "%lld" : {
 
     },
+    "%lld %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld %2$@"
+          }
+        }
+      }
+    },
     "%lld visit%@" : {
       "localizations" : {
         "en" : {
@@ -34,6 +44,12 @@
       }
     },
     "%lld%%" : {
+
+    },
+    "🚨 No address data" : {
+
+    },
+    "0" : {
 
     },
     "Add Photos" : {
@@ -1482,6 +1498,9 @@
 
     },
     "Filter options coming soon" : {
+
+    },
+    "Filters" : {
 
     },
     "Following" : {

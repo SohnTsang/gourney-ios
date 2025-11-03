@@ -239,8 +239,6 @@ struct DiscoverView: View {
             .padding(.horizontal, 70)
             .padding(.top, 12)
             .padding(.bottom, 12)  // ✅ Increased bottom padding
-            
-            Spacer()
         }
     }
     
@@ -449,11 +447,12 @@ struct DiscoverView: View {
             
             VStack(spacing: 0) {
                 Spacer()
-                    .frame(height: 140)  // Space for top section
+                    .frame(height: 110)  // Space for top section
                 
                 PlacesListView(places: allPlaces) { item in
                     handleListItemTap(item)
                 }
+
             }
         }
     }
@@ -683,15 +682,6 @@ struct DiscoverView: View {
         } else if let searchResult = item.searchResult {
             Task {
                 await viewModel.selectSearchResult(searchResult)
-            }
-        }
-        
-        withAnimation {
-            showListView = false
-            
-            if let saved = savedMapRegion {
-                region = saved
-                mapPosition = .region(saved)
             }
         }
     }

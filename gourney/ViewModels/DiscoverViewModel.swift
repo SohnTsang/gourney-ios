@@ -237,42 +237,54 @@ class DiscoverViewModel: ObservableObject {
         print("   🧹 Cleared \(oldCount) old places")
         
         do {
-            var queryItems = [
-                URLQueryItem(name: "select", value: "id,provider,google_place_id,apple_place_id,name_en,name_ja,name_zh,lat,lng,city,ward,categories,avg_rating,visit_count,phone,website,address,created_at,updated_at"),
-                URLQueryItem(name: "order", value: "created_at.desc"),
-                URLQueryItem(name: "limit", value: "50")
-            ]
-            
-            if let region = region {
-                let latDelta = region.span.latitudeDelta / 2
-                let lngDelta = region.span.longitudeDelta / 2
-                
-                let minLat = region.center.latitude - latDelta
-                let maxLat = region.center.latitude + latDelta
-                let minLng = region.center.longitude - lngDelta
-                let maxLng = region.center.longitude + lngDelta
-                
-                queryItems.append(URLQueryItem(name: "lat", value: "gte.\(minLat)"))
-                queryItems.append(URLQueryItem(name: "lat", value: "lte.\(maxLat)"))
-                queryItems.append(URLQueryItem(name: "lng", value: "gte.\(minLng)"))
-                queryItems.append(URLQueryItem(name: "lng", value: "lte.\(maxLng)"))
+            // ✅ Call edge function
+            let url = "\(Config.supabaseURL)/functions/v1/places-nearby"
+            guard let requestURL = URL(string: url) else {
+                throw URLError(.badURL)
             }
             
-            if showFollowingOnly {
-                beenToPlaces = []
-                isLoading = false
-                return
+            var request = URLRequest(url: requestURL)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue(Config.supabaseAnonKey, forHTTPHeaderField: "apikey")
+            
+            if let token = SupabaseClient.shared.getAuthToken() {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             }
             
-            let places: [Place] = try await client.get(
-                path: "/rest/v1/places",
-                queryItems: queryItems
+            // Use provided region or default
+            let mapRegion = region ?? MKCoordinateRegion(
+                center: CLLocationCoordinate2D(latitude: 35.6762, longitude: 139.6503),
+                span: MKCoordinateSpan(latitudeDelta: 0.16, longitudeDelta: 0.1)
             )
             
-            beenToPlaces = places.map { place in
+            let requestBody: [String: Any] = [
+                "lat": mapRegion.center.latitude,
+                "lng": mapRegion.center.longitude,
+                "latDelta": mapRegion.span.latitudeDelta,
+                "lngDelta": mapRegion.span.longitudeDelta,
+                "limit": 50
+            ]
+            request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
+            
+            let (data, response) = try await URLSession.shared.data(for: request)
+            
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+                throw URLError(.badServerResponse)
+            }
+            
+            struct PlacesResponse: Codable {
+                let places: [Place]
+            }
+            
+            let decoder = JSONDecoder()
+            decoder.keyDecodingStrategy = .convertFromSnakeCase
+            let placesResponse = try decoder.decode(PlacesResponse.self, from: data)
+            
+            beenToPlaces = placesResponse.places.map { place in
                 PlaceWithVisits(
                     place: place,
-                    visitCount: 0,
+                    visitCount: place.visitCount ?? 0,
                     friendVisitCount: 0,
                     visits: []
                 )

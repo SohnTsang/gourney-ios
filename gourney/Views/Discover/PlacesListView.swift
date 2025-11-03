@@ -13,39 +13,41 @@ struct PlacesListView: View {
     @State private var displayedCount = 20  // ✅ ADD THIS
 
     var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                if places.isEmpty {
-                    emptyState
-                } else {
-                    ForEach(displayedPlaces) { item in  // ✅ Changed from 'places' to 'displayedPlaces'
-                        PlaceListRow(
-                            item: item,
-                            distance: locationManager.formattedDistance(from: item.coordinate)
-                        )
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            onPlaceTap(item)
+        GeometryReader { geometry in
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    if places.isEmpty {
+                        emptyState
+                    } else {
+                        ForEach(displayedPlaces) { item in
+                            PlaceListRow(
+                                item: item,
+                                distance: locationManager.formattedDistance(from: item.coordinate)
+                            )
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                onPlaceTap(item)
+                            }
+                            
+                            if item.id != displayedPlaces.last?.id {
+                                Divider()
+                                    .padding(.leading, 90)
+                            }
                         }
                         
-                        if item.id != displayedPlaces.last?.id {  // ✅ Changed to 'displayedPlaces'
-                            Divider()
-                                .padding(.leading, 90)
+                        if hasMore {
+                            loadMoreView
+                                .onAppear {
+                                    loadMore()
+                                }
                         }
                     }
-                    
-                    // ✅ ADD THIS - Load More Trigger
-                    if hasMore {
-                        loadMoreView
-                            .onAppear {
-                                loadMore()
-                            }
-                    }
                 }
+                .padding(.bottom, 0)
             }
-            .padding(.top, 8)
+            .frame(height: geometry.size.height)
+            .background(colorScheme == .dark ? Color(.systemBackground) : Color(.systemGroupedBackground))
         }
-        .background(colorScheme == .dark ? Color(.systemBackground) : Color(.systemGroupedBackground))
     }
     
     // ✅ ADD THESE
@@ -117,36 +119,66 @@ struct PlaceListRow: View {
                     .foregroundColor(colorScheme == .dark ? .white : .black)
                     .lineLimit(1)
                 
-                // Metadata row
-                HStack(spacing: 8) {
+                // Rating + stars + visit count on same line
+                HStack(spacing: 4) {
                     // Rating
                     if let rating = item.rating {
-                        HStack(spacing: 3) {
-                            Image(systemName: "star.fill")
-                                .font(.system(size: 10))
-                                .foregroundColor(.yellow)
-                            Text(String(format: "%.1f", rating))
-                                .font(.system(size: 13))
-                                .foregroundColor(.secondary)
+                        Text(String(format: "%.1f", rating))
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(.primary)
+                        
+                        HStack(spacing: 2) {
+                            ForEach(0..<5) { index in
+                                Image(systemName: index < Int(rating.rounded()) ? "star.fill" : "star")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(index < Int(rating.rounded()) ? .yellow : .gray)
+                            }
+                        }
+                    } else {
+                        Text("0")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(.primary)
+                        
+                        HStack(spacing: 2) {
+                            ForEach(0..<5) { index in
+                                Image(systemName: "star")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.gray)
+                            }
                         }
                     }
                     
-                    // Price level
-                    if let priceLevel = item.priceLevel {
-                        Text(String(repeating: "$", count: priceLevel))
+                    // Visit count
+                    if let visitCount = item.visitCount {
+                        Text("·")
+                            .foregroundColor(.secondary)
+                        Text("\(visitCount) \(visitCount == 1 ? "visit" : "visits")")
                             .font(.system(size: 13))
                             .foregroundColor(.secondary)
                     }
-                    
-                    // Category
-                    if let category = item.category {
-                        Text("·")
+                }
+                .onAppear {
+                    print("🔍 [PlaceListRow] Item: \(item.name)")
+                    print("   Rating: \(item.rating?.description ?? "nil")")
+                    print("   Visit Count: \(item.visitCount?.description ?? "nil")")
+                    print("   Address: \(item.address ?? "nil")")
+                }
+                
+                // Address below rating
+                if let address = item.address, !address.isEmpty {
+                    HStack(spacing: 4) {
+                        Image(systemName: "mappin.circle.fill")
+                            .font(.system(size: 11))
                             .foregroundColor(.secondary)
-                        Text(category)
-                            .font(.system(size: 13))
+                        Text(address)
+                            .font(.system(size: 12))
                             .foregroundColor(.secondary)
                             .lineLimit(1)
                     }
+                } else {
+                    Text("🚨 No address data")
+                        .font(.system(size: 12))
+                        .foregroundColor(.red)
                 }
                 
                 // Distance
@@ -225,6 +257,8 @@ struct PlaceListItem: Identifiable, Hashable {
     let category: String?
     let photoUrl: String?
     let isVisited: Bool
+    let visitCount: Int?
+    let address: String?
     
     // Original data
     let place: Place?
@@ -239,7 +273,24 @@ struct PlaceListItem: Identifiable, Hashable {
         self.category = place.categories?.first
         self.photoUrl = place.photoUrls?.first
         self.isVisited = true
+        self.visitCount = place.visitCount  // ✅ FIX: Was nil
+        self.address = place.formattedAddress
         self.place = place
+        self.searchResult = nil
+    }
+    
+    init(from placeWithVisits: PlaceWithVisits) {
+        self.id = placeWithVisits.place.id
+        self.name = placeWithVisits.place.displayName
+        self.coordinate = placeWithVisits.place.coordinate
+        self.rating = placeWithVisits.place.rating
+        self.priceLevel = placeWithVisits.place.priceLevel
+        self.category = placeWithVisits.place.categories?.first
+        self.photoUrl = placeWithVisits.place.photoUrls?.first
+        self.isVisited = true
+        self.visitCount = placeWithVisits.visitCount
+        self.address = placeWithVisits.place.formattedAddress
+        self.place = placeWithVisits.place
         self.searchResult = nil
     }
     
@@ -252,6 +303,8 @@ struct PlaceListItem: Identifiable, Hashable {
         self.category = result.categories?.first
         self.photoUrl = result.photoUrls?.first
         self.isVisited = result.existsInDb
+        self.visitCount = nil
+        self.address = result.formattedAddress
         self.place = nil
         self.searchResult = result
     }
@@ -264,5 +317,3 @@ struct PlaceListItem: Identifiable, Hashable {
         hasher.combine(id)
     }
 }
-
-
