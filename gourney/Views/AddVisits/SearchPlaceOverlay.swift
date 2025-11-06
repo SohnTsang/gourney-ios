@@ -13,6 +13,12 @@ import SwiftUI
 import MapKit
 import Combine
 
+// ✅ Response model for check-place-ids edge function
+struct CheckPlaceIdsResponse: Codable {
+    let existingAppleIds: [String]?
+    let existingGoogleIds: [String]?
+}
+
 struct SearchPlaceOverlay: View {
     @Binding var isPresented: Bool
     let onPlaceSelected: (PlaceSearchResult) -> Void
@@ -111,32 +117,28 @@ struct SearchPlaceOverlay: View {
                 TextField("Search for a place", text: $viewModel.searchQuery)
                     .font(.system(size: 17))
                     .focused($isFocused)
-                    .onChange(of: viewModel.searchQuery) { _, newValue in
-                        Task {
-                            await viewModel.performSearch(
-                                lat: locationManager.userLocation?.latitude ?? 35.6762,
-                                lng: locationManager.userLocation?.longitude ?? 139.6503
-                            )
-                        }
+                    .autocorrectionDisabled()
+                    .onSubmit {
+                        performSearch()
                     }
                 
-                if !viewModel.searchQuery.isEmpty {
+                if viewModel.isLoading {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                } else if !viewModel.searchQuery.isEmpty {
                     Button {
                         viewModel.searchQuery = ""
                         viewModel.clearResults()
                     } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 18))
+                            .font(.system(size: 16))
                             .foregroundColor(.secondary)
                     }
-                }
-                
-                // Filter button - appears only when results exist
-                if !viewModel.displayedResults.isEmpty {
+                    
                     Button {
-                        showFilterSheet = true
+                        performSearch()
                     } label: {
-                        Image(systemName: "line.3.horizontal.decrease.circle.fill")
+                        Image(systemName: "magnifyingglass.circle.fill")
                             .font(.system(size: 20))
                             .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
                     }
@@ -146,6 +148,21 @@ struct SearchPlaceOverlay: View {
             .padding(.vertical, 10)
             .background(colorScheme == .dark ? Color(white: 0.15) : Color(white: 0.95))
             .cornerRadius(20)
+        }
+    }
+    
+    private func performSearch() {
+        guard !viewModel.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return
+        }
+        
+        isFocused = false // Dismiss keyboard
+        
+        Task {
+            await viewModel.performSearch(
+                lat: locationManager.userLocation?.latitude ?? 35.6762,
+                lng: locationManager.userLocation?.longitude ?? 139.6503
+            )
         }
     }
     
@@ -362,19 +379,83 @@ class SearchPlaceViewModel: ObservableObject {
                 
                 print("🍎 [APPLE] \(appleResults.count) results")
                 
+                // ✅ NEW: Batch check all Apple IDs against DB
+                let appleIds = appleResults.map { $0.applePlaceId }
+                let dbCheckBody: [String: Any] = [
+                    "apple_place_ids": appleIds
+                ]
+                
+                var existingAppleIds = Set<String>()
+                var dbPlacesMap: [String: PlaceSearchResult] = [:]
+                
+                do {
+                    let checkResponse: CheckPlaceIdsResponse = try await client.post(
+                        path: "/functions/v1/check-place-ids",
+                        body: dbCheckBody
+                    )
+                    print("🔍 [DEDUP] checkResponse: \(checkResponse)")
+                    print("🔍 [DEDUP] existingAppleIds: \(String(describing: checkResponse.existingAppleIds))")
+                    
+                    if let ids = checkResponse.existingAppleIds {
+                        existingAppleIds = Set(ids)
+                        print("🔍 [DEDUP] Found \(ids.count) existing Apple IDs in DB")
+                        print("🔍 [DEDUP] IDs array: \(ids)")
+                        print("🔍 [DEDUP] isEmpty check: \(!ids.isEmpty)")
+
+                        // ✅ Fetch full place data for these IDs
+                        if !ids.isEmpty {
+                            print("🔄 [DEDUP] Fetching \(ids.count) places from DB...")
+                            let fetchBody: [String: Any] = [
+                                "apple_place_ids": ids
+                            ]
+                            
+                            do {
+                                let fetchResponse: SearchPlacesResponse = try await client.post(
+                                    path: "/functions/v1/fetch-places-by-ids",
+                                    body: fetchBody
+                                )
+                                
+                                print("📦 [DEDUP] Fetch response: \(fetchResponse.results.count) places")
+                                
+                                for place in fetchResponse.results {
+                                    if let appleId = place.applePlaceId {
+                                        dbPlacesMap[appleId] = place
+                                        print("   - \(place.displayName) (ID: \(appleId))")
+                                    }
+                                }
+                                print("✅ [DEDUP] Fetched \(dbPlacesMap.count) DB places")
+                            } catch {
+                                print("❌ [DEDUP] Failed to fetch DB places: \(error)")
+                            }
+                        } else {
+                            print("⏭️ [DEDUP] No existing Apple IDs to fetch")
+                        }
+                    }
+                } catch {
+                    print("⚠️ [DEDUP] Failed to check Apple IDs: \(error)")
+                }
+                
                 for appleResult in appleResults {
-                    // Check by Apple ID
+                    // ✅ If exists in DB, add DB version instead
+                    if let dbPlace = dbPlacesMap[appleResult.applePlaceId] {
+                        if !combinedResults.contains(where: { $0.dbPlaceId == dbPlace.dbPlaceId }) {
+                            combinedResults.append(dbPlace)
+                            print("✅ [DEDUP] Added DB version: \(dbPlace.displayName)")
+                        }
+                        continue
+                    }
+                    
+                    // Check by Apple ID from previous DB results
                     if dbPlaceIds.contains(appleResult.applePlaceId) {
                         print("⏭️ [DEDUP] Skipping Apple result (exists in DB): \(appleResult.name)")
                         continue
                     }
                     
-                    // ✅ Check by location + name (same location with different names is OK)
+                    // Check by location + name
                     let isDuplicate = combinedResults.contains { dbResult in
                         let distance = CLLocation(latitude: dbResult.lat, longitude: dbResult.lng)
                             .distance(from: CLLocation(latitude: appleResult.lat, longitude: appleResult.lng))
                         
-                        // Only duplicate if BOTH location is close AND name is similar
                         guard distance < 50 else { return false }
                         
                         let normalizedApple = appleResult.name.lowercased()
@@ -470,6 +551,7 @@ struct SearchPlaceConfirmSheet: View {
             phoneNumber: result.appleFullData?.phone,
             website: result.appleFullData?.website,
             photoUrls: result.photoUrls,
+            googlePlaceId: result.googlePlaceId,  // ✅ Pass Google Place ID
             primaryButtonTitle: "Confirm Location",
             primaryButtonAction: {
                 onConfirm(result)

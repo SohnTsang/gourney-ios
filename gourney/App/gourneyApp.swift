@@ -2,16 +2,18 @@ import SwiftUI
 
 @main
 struct GourneyApp: App {
-    init() {
-        }
+    @UIApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @StateObject private var authManager = AuthManager.shared
+    
+    init() {
+    }
     
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .onAppear {
-                                    MemoryDebugHelper.shared.logMemory(tag: "🚀 App Started")
-                                }
+                    MemoryDebugHelper.shared.logMemory(tag: "🚀 App Started")
+                }
                 .onOpenURL { url in
                     handleDeepLink(url)
                 }
@@ -133,13 +135,13 @@ struct GourneyApp: App {
             
             if authManager.currentUser == nil {
                 // New user - show profile completion
-                print("📝 [Auth Callback] New user - showing profile completion")
+                print("🆕 [Auth Callback] New user - showing profile completion")
                 authManager.needsProfileCompletion = true
                 authManager.isAuthenticated = false
                 authManager.emailConfirmationRequired = false
             } else if let user = authManager.currentUser, authManager.isProfileIncomplete(user) {
                 // Profile exists but incomplete (system-generated) - show profile completion
-                print("📝 [Auth Callback] Profile incomplete - showing profile completion")
+                print("🆕 [Auth Callback] Profile incomplete - showing profile completion")
                 authManager.needsProfileCompletion = true
                 authManager.isAuthenticated = false
                 authManager.emailConfirmationRequired = false
@@ -175,5 +177,44 @@ struct GourneyApp: App {
         
         // TODO: Navigate to visit detail
         // You can implement this later when you have visit detail view
+    }
+}
+
+// MARK: - App Delegate
+
+class AppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication,
+                    didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
+        
+        // ✅ Register for memory warnings
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleMemoryWarning),
+            name: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil
+        )
+        
+        print("✅ [AppDelegate] Memory warning observer registered")
+        
+        return true
+    }
+    
+    @objc func handleMemoryWarning() {
+        print("⚠️ [AppDelegate] Memory warning received - clearing caches")
+        
+        Task { @MainActor in
+            // Clear Google Places session cache
+            GooglePlaceDetailFetcher.shared.handleMemoryWarning()
+            
+            // Clear URL cache
+            URLCache.shared.removeAllCachedResponses()
+            
+            // Log memory after cleanup
+            MemoryDebugHelper.shared.logMemory(tag: "🧹 After Memory Warning")
+        }
+    }
+    
+    deinit {
+        NotificationCenter.default.removeObserver(self)
     }
 }

@@ -1,11 +1,10 @@
 // Views/Components/PlaceDetailSheet.swift
-// ✅ SIMPLIFIED: Single loading overlay, show all at once
+// ✅ FIXED: Always prioritize visit rating from DB
 
 import SwiftUI
 import CoreLocation
 
 struct PlaceDetailSheet: View {
-    // Data source
     let placeId: String
     let displayName: String
     let lat: Double
@@ -14,8 +13,8 @@ struct PlaceDetailSheet: View {
     let phoneNumber: String?
     let website: String?
     let photoUrls: [String]?
+    let googlePlaceId: String?
     
-    // Action configuration
     let primaryButtonTitle: String
     let primaryButtonAction: () -> Void
     let onDismiss: (() -> Void)?
@@ -31,14 +30,15 @@ struct PlaceDetailSheet: View {
     @State private var placeAddress: String? = nil
     @State private var placePhone: String? = nil
     @State private var placeWebsite: String? = nil
+    @State private var placeName: String? = nil
     @State private var cachedPhotoUrls: [String]? = nil
+    @State private var openNow: Bool? = nil
+    @State private var openingHours: [String]? = nil
     
     var body: some View {
         ZStack {
-            // Content (hidden while loading)
             GeometryReader { geometry in
                 VStack(spacing: 0) {
-                    // Drag indicator
                     RoundedRectangle(cornerRadius: 3)
                         .fill(Color.secondary.opacity(0.3))
                         .frame(width: 36, height: 5)
@@ -48,33 +48,44 @@ struct PlaceDetailSheet: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 0) {
                             VStack(alignment: .leading, spacing: 0) {
-                                // Name (semibold only)
-                                Text(displayName)
+                                Text(placeName ?? displayName)
                                     .font(.system(size: 22, weight: .semibold))
                                     .foregroundColor(.primary)
                                     .padding(.bottom, 8)
                                 
-                                // Rating with distance badge
                                 RatingWithDistanceView(
                                     rating: avgRating,
                                     distance: calculateDistance()
                                 )
                                 .padding(.bottom, 4)
                                 
-                                // Address
                                 if let address = placeAddress ?? formattedAddress, !address.isEmpty {
                                     AddressView(address: address)
                                         .padding(.bottom, 16)
                                 }
                                 
-                                // Visit status
-                                VisitStatusView(visitCount: visitCount, isLoading: false)
-                                    .padding(.bottom, 20)
+                                HStack(alignment: .center) {
+                                    VisitStatusView(visitCount: visitCount, isLoading: false)
+                                    Spacer()
+                                    
+                                    if let isOpen = openNow {
+                                        HStack(spacing: 5) {
+                                            Circle()
+                                                .fill(isOpen ? Color.green : Color.red)
+                                                .frame(width: 7, height: 7)
+                                            Text(isOpen ? "Open" : "Closed")
+                                                .font(.system(size: 13, weight: .medium))
+                                                .foregroundColor(isOpen ? .green : .red)
+                                        }
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 4)
+                                    }
+                                }
+                                .padding(.bottom, 20)
                             }
                             .padding(.horizontal, 20)
                             .padding(.top, 16)
                             
-                            // Photos section (after name/rating/address/visit)
                             if let photos = cachedPhotoUrls, !photos.isEmpty {
                                 ScrollView(.horizontal, showsIndicators: false) {
                                     HStack(spacing: 8) {
@@ -88,7 +99,6 @@ struct PlaceDetailSheet: View {
                                                         .frame(width: 160, height: 213)
                                                         .clipShape(RoundedRectangle(cornerRadius: 12))
                                                 case .failure(_):
-                                                    // Don't show placeholder for failed images
                                                     EmptyView()
                                                 case .empty:
                                                     ProgressView()
@@ -97,7 +107,7 @@ struct PlaceDetailSheet: View {
                                                     EmptyView()
                                                 }
                                             }
-                                            .id("\(photoUrl)-\(index)")  // Force refresh on URL change
+                                            .id("\(photoUrl)-\(index)")
                                         }
                                     }
                                     .padding(.horizontal, 20)
@@ -105,7 +115,6 @@ struct PlaceDetailSheet: View {
                                 .frame(height: 213)
                                 .padding(.bottom, 20)
                             } else {
-                                // Empty photo placeholder (3:4 ratio)
                                 VStack(spacing: 12) {
                                     Image(systemName: "camera.fill")
                                         .font(.system(size: 40))
@@ -122,14 +131,48 @@ struct PlaceDetailSheet: View {
                                 .padding(.bottom, 20)
                             }
                             
+                            if let hours = openingHours, !hours.isEmpty {
+                                Divider()
+                                    .padding(.horizontal, 20)
+                                    .padding(.bottom, 20)
+                                
+                                VStack(alignment: .leading, spacing: 12) {
+                                    HStack {
+                                        Image(systemName: "clock")
+                                            .font(.system(size: 16, weight: .medium))
+                                            .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
+                                        Text("Hours")
+                                            .font(.system(size: 17, weight: .semibold))
+                                            .foregroundColor(.primary)
+                                    }
+                                    
+                                    VStack(spacing: 10) {
+                                        ForEach(hours, id: \.self) { hourLine in
+                                            HStack(alignment: .top, spacing: 0) {
+                                                Text(extractDay(from: hourLine))
+                                                    .font(.system(size: 14, weight: .medium))
+                                                    .foregroundColor(.primary)
+                                                    .frame(width: 90, alignment: .leading)
+                                                
+                                                Text(extractTime(from: hourLine))
+                                                    .font(.system(size: 14))
+                                                    .foregroundColor(.secondary)
+                                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                            }
+                                        }
+                                    }
+                                }
+                                .padding(.horizontal, 20)
+                                .padding(.bottom, 20)
+                            }
+                            
                             VStack(alignment: .leading, spacing: 0) {
                                 Divider()
                                     .padding(.horizontal, 20)
                                     .padding(.bottom, 16)
                                 
-                                // Directions
                                 DirectionsButton(
-                                    placeName: displayName,
+                                    placeName: placeName ?? displayName,
                                     address: placeAddress ?? formattedAddress ?? ""
                                 )
                                 .padding(.horizontal, 20)
@@ -138,7 +181,6 @@ struct PlaceDetailSheet: View {
                                     .padding(.horizontal, 20)
                                     .padding(.vertical, 12)
                                 
-                                // Phone
                                 if let phone = placePhone ?? phoneNumber, !phone.isEmpty {
                                     PhoneButton(phone: phone)
                                         .padding(.horizontal, 20)
@@ -147,9 +189,8 @@ struct PlaceDetailSheet: View {
                                         .padding(.vertical, 12)
                                 }
                                 
-                                // Website
-                                if let website = placeWebsite ?? website, !website.isEmpty {
-                                    WebsiteButton(website: website)
+                                if let web = placeWebsite ?? website, !web.isEmpty {
+                                    WebsiteButton(website: web)
                                         .padding(.horizontal, 20)
                                     Divider()
                                         .padding(.horizontal, 20)
@@ -161,7 +202,6 @@ struct PlaceDetailSheet: View {
                         }
                     }
                     
-                    // Bottom buttons
                     VStack(spacing: 0) {
                         HStack(spacing: 12) {
                             Button {
@@ -200,9 +240,8 @@ struct PlaceDetailSheet: View {
                     }
                 }
             }
-            .opacity(isLoading ? 0 : 1)  // ✅ Hide ALL content while loading
+            .opacity(isLoading ? 0 : 1)
             
-            // Loading overlay (on top)
             if isLoading {
                 VStack(spacing: 16) {
                     ProgressView()
@@ -220,9 +259,8 @@ struct PlaceDetailSheet: View {
         .presentationDetents([.fraction(0.4), .large])
         .presentationDragIndicator(.hidden)
         .presentationBackgroundInteraction(.enabled)
-        .id(placeId)  // ✅ Force reload when placeId changes
+        .id(placeId)
         .onChange(of: placeId) { _ in
-            // ✅ Immediately show loading when placeId changes (prevents name flash)
             isLoading = true
             cachedPhotoUrls = nil
             visits = []
@@ -230,98 +268,83 @@ struct PlaceDetailSheet: View {
             placeAddress = nil
             placePhone = nil
             placeWebsite = nil
+            placeName = nil
+            openNow = nil
+            openingHours = nil
         }
-        .task(id: placeId) {  // ✅ Reload when placeId changes
+        .task(id: placeId) {
             await loadAllData()
         }
         .onDisappear {
-            // ✅ Aggressive memory cleanup
             cachedPhotoUrls = nil
             visits = []
             avgRating = nil
             placeAddress = nil
             placePhone = nil
             placeWebsite = nil
-            
-            // ✅ Clear URL cache aggressively to free memory
-            URLCache.shared.removeAllCachedResponses()
-            
-            // ✅ Force memory cleanup
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                URLCache.shared.diskCapacity = 0
-                URLCache.shared.memoryCapacity = 0
-                URLCache.shared.diskCapacity = 10 * 1024 * 1024 // Reset to 10MB
-                URLCache.shared.memoryCapacity = 5 * 1024 * 1024 // Reset to 5MB
-            }
-            
-            print("💾 [PlaceDetail] Memory cleaned on disappear")
+            placeName = nil
+            openNow = nil
+            openingHours = nil
+            MemoryDebugHelper.shared.logMemory(tag: "💾 [PlaceDetail] Memory cleared")
         }
     }
     
-    // MARK: - Load All Data at Once
+    // MARK: - Load All Data
     
     private func loadAllData() async {
-        await MainActor.run {
-            isLoading = true
-            // Clear previous data IMMEDIATELY to free memory
-            cachedPhotoUrls = nil
-            visits = []
-            avgRating = nil
-            placeAddress = nil
-            placePhone = nil
-            placeWebsite = nil
+        let visitsData = await fetchVisits()
+        
+        // ✅ ALWAYS fetch DB data first (contains visit avgRating)
+        let placeData = try? await fetchPlaceData(placeId: placeId)
+        
+        if let (fetchedVisits, count) = visitsData {
+            visits = fetchedVisits
+            visitCount = count
+            cachedPhotoUrls = computeTopVisitPhotos(from: fetchedVisits)
         }
         
-        print("🔍 [PlaceDetail] Loading all data for: \(placeId), Name: \(displayName)")
-        print("💾 [PlaceDetail] Memory cleared before loading")
+        let isStub = displayName == "Unknown Place" || displayName.isEmpty
         
-        // Load visits and place data in parallel
-        async let visitsTask = fetchVisits()
-        async let placeDataTask = fetchPlaceData(placeId: placeId)
-        
-        let visitsResult = await visitsTask
-        let placeDataResult: (address: String?, phone: String?, website: String?, avgRating: Double?)?
-        do {
-            placeDataResult = try await placeDataTask
-        } catch {
-            print("❌ [PlaceDetail] Failed to fetch place data: \(error)")
-            placeDataResult = nil
-        }
-        
-        await MainActor.run {
-            // Set visits
-            if let visitsResult = visitsResult {
-                visits = visitsResult.visits
-                visitCount = visitsResult.visitCount
-                // ✅ MEMORY FIX: Limit to max 3 photos to prevent memory bloat (was 5)
-                let allPhotos = computeTopVisitPhotos(from: visitsResult.visits)
-                // ✅ Filter out empty/invalid URLs
-                let validPhotos = allPhotos.filter { !$0.isEmpty && URL(string: $0) != nil }
-                cachedPhotoUrls = Array(validPhotos.prefix(3))
-                print("💾 [PlaceDetail] Limited photos from \(allPhotos.count) to \(cachedPhotoUrls?.count ?? 0)")
+        if isStub, let googleId = googlePlaceId {
+            // Fetch Google for name, address, phone, website, hours
+            do {
+                let googleData = try await GooglePlaceDetailFetcher.shared.fetchDetails(googlePlaceId: googleId)
+                
+                placeName = googleData.name
+                placeAddress = googleData.address
+                placePhone = googleData.phone
+                placeWebsite = googleData.website
+                openNow = googleData.openingHours?.openNow
+                openingHours = googleData.openingHours?.weekdayText
+                
+                // ✅ Rating priority: DB avgRating (visits) > Google rating
+                if let dbRating = placeData?.avgRating {
+                    avgRating = dbRating
+                    print("✅ [PlaceDetail] Using DB visit rating: \(dbRating)")
+                } else {
+                    avgRating = googleData.rating
+                    print("✅ [PlaceDetail] Using Google rating: \(googleData.rating ?? 0.0)")
+                }
+            } catch {
+                print("❌ [PlaceDetail] Google API failed: \(error)")
             }
+        } else if let placeData = placeData {
+            // Non-stub: use all DB data
+            avgRating = placeData.avgRating
+            placeAddress = placeData.address
+            placePhone = placeData.phone
+            placeWebsite = placeData.website
+            openNow = placeData.openNow
+            openingHours = placeData.openingHours
             
-            // Set place data
-            if let placeData = placeDataResult {
-                avgRating = placeData.avgRating
-                placeAddress = placeData.address
-                placePhone = placeData.phone
-                placeWebsite = placeData.website
+            if let name = placeData.name, !name.isEmpty {
+                placeName = name
             }
-            
-            isLoading = false
-            
-            print("✅ [PlaceDetail] All data loaded:")
-            print("   avgRating: \(avgRating ?? 0.0)")
-            print("   placeAddress: \(placeAddress ?? "nil")")
-            print("   placePhone: \(placePhone ?? "nil")")
-            print("   placeWebsite: \(placeWebsite ?? "nil")")
-            print("   visitCount: \(visitCount)")
-            print("   photoCount: \(cachedPhotoUrls?.count ?? 0)")
         }
+        
+        isLoading = false
+        MemoryDebugHelper.shared.logMemory(tag: "✅ PlaceDetail Loaded")
     }
-    
-    // MARK: - Fetch Visits
     
     private func fetchVisits() async -> (visits: [EdgeFunctionVisit], visitCount: Int)? {
         do {
@@ -349,23 +372,16 @@ struct PlaceDetailSheet: View {
             
             return (result.visits, result.visitCount)
         } catch {
-            print("❌ [PlaceDetail] Failed to fetch visits: \(error)")
             return nil
         }
     }
     
-    // MARK: - Compute Top Photos
-    
     private func computeTopVisitPhotos(from visits: [EdgeFunctionVisit]) -> [String] {
-        // ✅ First filter to only visits that HAVE photos
         let visitsWithPhotos = visits.filter { !$0.photoUrls.isEmpty }
-        // Then sort by likes and get top 10
         let sortedVisits = visitsWithPhotos.sorted { ($0.likesCount ?? 0) > ($1.likesCount ?? 0) }
         let topVisits = Array(sortedVisits.prefix(10))
         return topVisits.compactMap { $0.photoUrls.first }
     }
-    
-    // MARK: - Helpers
     
     private func calculateDistance() -> String? {
         guard let userLocation = locationManager.userLocation else { return nil }
@@ -386,7 +402,7 @@ struct PlaceDetailSheet: View {
         
         let activityVC = UIActivityViewController(
             activityItems: [
-                "\(displayName)\n\(placeAddress ?? formattedAddress ?? "")",
+                "\(placeName ?? displayName)\n\(placeAddress ?? formattedAddress ?? "")",
                 url
             ],
             applicationActivities: nil
@@ -398,9 +414,22 @@ struct PlaceDetailSheet: View {
         }
     }
     
-    private func fetchPlaceData(placeId: String) async throws -> (address: String?, phone: String?, website: String?, avgRating: Double?)? {
-        print("🏢 [PlaceData] Fetching place details for: \(placeId)")
-        
+    private func extractDay(from hourLine: String) -> String {
+        if let colonIndex = hourLine.firstIndex(of: ":") {
+            return String(hourLine[..<colonIndex])
+        }
+        return hourLine
+    }
+    
+    private func extractTime(from hourLine: String) -> String {
+        if let colonIndex = hourLine.firstIndex(of: ":") {
+            let afterColon = hourLine.index(after: colonIndex)
+            return String(hourLine[afterColon...]).trimmingCharacters(in: .whitespaces)
+        }
+        return ""
+    }
+    
+    private func fetchPlaceData(placeId: String) async throws -> (name: String?, address: String?, phone: String?, website: String?, avgRating: Double?, openNow: Bool?, openingHours: [String]?)? {
         let url = "\(Config.supabaseURL)/functions/v1/places-detail/\(placeId)"
         guard let requestURL = URL(string: url) else { return nil }
         
@@ -424,15 +453,21 @@ struct PlaceDetailSheet: View {
             let place: PlaceObject
             
             struct PlaceObject: Codable {
+                let nameEn: String?
                 let address: String?
                 let phone: String?
                 let website: String?
                 let avgRating: Double?
+                let openNow: Bool?
+                let openingHours: [String]?
                 let attributes: PlaceAttributes?
                 
                 enum CodingKeys: String, CodingKey {
+                    case nameEn = "name_en"
                     case address, phone, website
                     case avgRating = "avg_rating"
+                    case openNow = "open_now"
+                    case openingHours = "opening_hours"
                     case attributes
                 }
             }
@@ -453,16 +488,19 @@ struct PlaceDetailSheet: View {
         let placeResponse = try decoder.decode(PlaceDetailResponse.self, from: data)
         let placeDetail = placeResponse.place
         
-        // Priority: Direct columns > attributes JSONB
+        let finalName = placeDetail.nameEn
         let finalAddress = placeDetail.address ?? placeDetail.attributes?.formattedAddress
         let finalPhone = placeDetail.phone ?? placeDetail.attributes?.phone
         let finalWebsite = placeDetail.website ?? placeDetail.attributes?.website
         
         return (
+            name: finalName,
             address: finalAddress,
             phone: finalPhone,
             website: finalWebsite,
-            avgRating: placeDetail.avgRating
+            avgRating: placeDetail.avgRating,
+            openNow: placeDetail.openNow,
+            openingHours: placeDetail.openingHours
         )
     }
 }

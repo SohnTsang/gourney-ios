@@ -1,5 +1,6 @@
 // ViewModels/DiscoverViewModel.swift
-// ✅ FIXED: Uses correct Place field names (avgRating, visitCount, phone)
+// ✅ UPDATED: Only show places with visits (visitCount > 0)
+// ✅ Tier 2 Apple MapKit search commented out
 
 import Foundation
 import CoreLocation
@@ -50,7 +51,7 @@ class DiscoverViewModel: ObservableObject {
         
         var dbPlaceIds = Set<String>()
         
-        // TIER 1: Database Search
+        // TIER 1: Database Search (Only places with visits)
         do {
             let requestBody: [String: Any] = [
                 "query": query,
@@ -65,6 +66,7 @@ class DiscoverViewModel: ObservableObject {
                 body: requestBody
             )
             
+            // ✅ Only show places that exist in DB (have visits)
             let dbResults = response.results.filter { $0.existsInDb }
             
             beenToPlaces = dbResults.compactMap { result -> PlaceWithVisits? in
@@ -86,10 +88,10 @@ class DiscoverViewModel: ObservableObject {
                     photoUrls: result.photoUrls,
                     openNow: nil,
                     priceLevel: nil,
-                    avgRating: nil,           // ✅ FIXED: was rating
-                    visitCount: nil,          // ✅ FIXED: was missing
+                    avgRating: nil,
+                    visitCount: nil,
                     userRatingsTotal: nil,
-                    phone: nil,               // ✅ FIXED: was phoneNumber
+                    phone: nil,
                     website: nil,
                     openingHours: nil,
                     createdAt: nil,
@@ -108,7 +110,11 @@ class DiscoverViewModel: ObservableObject {
             print("⚠️ [Tier 1] Failed: \(error)")
         }
         
-        // TIER 2: Apple MapKit
+        // ============================================================
+        // TIER 2: Apple MapKit Search - COMMENTED OUT
+        // Only show places with visits from database
+        // ============================================================
+        /*
         print("🎯 [Tier 2] Searching Apple Maps for: '\(query)'")
         
         let mapSpan = MKCoordinateSpan(latitudeDelta: 0.02, longitudeDelta: 0.02)
@@ -175,10 +181,12 @@ class DiscoverViewModel: ObservableObject {
         } catch {
             print("⚠️ [Tier 2] Failed: \(error)")
         }
+        */
+        // ============================================================
         
         print("✅ [Search] Complete!")
-        print("   📍 DB (red): \(beenToPlaces.count)")
-        print("   🔍 Apple (orange): \(searchResults.count)")
+        print("   🔴 DB (red): \(beenToPlaces.count)")
+        print("   🟠 Apple (orange): \(searchResults.count)")
         print("   📊 Total: \(beenToPlaces.count + searchResults.count)")
         
         isSearching = false
@@ -197,7 +205,7 @@ class DiscoverViewModel: ObservableObject {
         print("🧹 [Search] Clearing...")
         Task {
             await aggressiveCleanup()
-            await fetchBeenToPlaces()
+            await fetchBeenToPlaces()  // ✅ No 'in:' needed here since region is optional
             MemoryDebugHelper.shared.logMemory(tag: "🧹 After Cleanup")
         }
     }
@@ -205,7 +213,8 @@ class DiscoverViewModel: ObservableObject {
     private func prepareForNewSearch() {
         searchResults.removeAll(keepingCapacity: false)
         beenToPlaces.removeAll(keepingCapacity: false)
-        error = nil
+        selectedPlace = nil
+        showPlaceInfo = false
         hasActiveSearch = false
     }
     
@@ -215,14 +224,11 @@ class DiscoverViewModel: ObservableObject {
         selectedPlace = nil
         showPlaceInfo = false
         hasActiveSearch = false
-        error = nil
         lastSearchQuery = ""
         lastSearchCenter = nil
-        searchResults = []
-        beenToPlaces = []
+        isSearching = false
+        error = nil
     }
-    
-    // MARK: - Fetch "Been To" Places
     
     func fetchBeenToPlaces(in region: MKCoordinateRegion? = nil) async {
         guard searchResults.isEmpty && !isSearching else { return }
@@ -237,22 +243,6 @@ class DiscoverViewModel: ObservableObject {
         print("   🧹 Cleared \(oldCount) old places")
         
         do {
-            // ✅ Call edge function
-            let url = "\(Config.supabaseURL)/functions/v1/places-nearby"
-            guard let requestURL = URL(string: url) else {
-                throw URLError(.badURL)
-            }
-            
-            var request = URLRequest(url: requestURL)
-            request.httpMethod = "POST"
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.setValue(Config.supabaseAnonKey, forHTTPHeaderField: "apikey")
-            
-            if let token = SupabaseClient.shared.getAuthToken() {
-                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            }
-            
-            // Use provided region or default
             let mapRegion = region ?? MKCoordinateRegion(
                 center: CLLocationCoordinate2D(latitude: 35.6762, longitude: 139.6503),
                 span: MKCoordinateSpan(latitudeDelta: 0.16, longitudeDelta: 0.1)
@@ -265,30 +255,67 @@ class DiscoverViewModel: ObservableObject {
                 "lngDelta": mapRegion.span.longitudeDelta,
                 "limit": 50
             ]
-            request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
-            
-            let (data, response) = try await URLSession.shared.data(for: request)
-            
-            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-                throw URLError(.badServerResponse)
-            }
             
             struct PlacesResponse: Codable {
                 let places: [Place]
             }
             
-            let decoder = JSONDecoder()
-            decoder.keyDecodingStrategy = .convertFromSnakeCase
-            let placesResponse = try decoder.decode(PlacesResponse.self, from: data)
+            let placesResponse: PlacesResponse = try await client.post(
+                path: "/functions/v1/places-nearby",
+                body: requestBody
+            )
             
-            beenToPlaces = placesResponse.places.map { place in
-                PlaceWithVisits(
-                    place: place,
-                    visitCount: place.visitCount ?? 0,
-                    friendVisitCount: 0,
-                    visits: []
-                )
+            print("✅ [Discover] Decoded \(placesResponse.places.count) places")
+            
+            var enrichedPlaces = placesResponse.places
+            for (index, place) in enrichedPlaces.enumerated() {
+                if place.nameEn == nil && place.nameJa == nil && place.nameZh == nil,
+                   let googlePlaceId = place.googlePlaceId {
+                    print("🔍 [Enrich] Fetching details for Google place: \(googlePlaceId)")
+                    do {
+                        let details = try await GooglePlaceDetailFetcher.shared.fetchDetails(googlePlaceId: googlePlaceId)
+                        
+                        enrichedPlaces[index] = Place(
+                            id: place.id,
+                            provider: place.provider,
+                            googlePlaceId: place.googlePlaceId,
+                            applePlaceId: place.applePlaceId,
+                            nameEn: details.nameEn ?? details.name,
+                            nameJa: details.nameJa,
+                            nameZh: details.nameZh,
+                            lat: place.lat,
+                            lng: place.lng,
+                            formattedAddress: details.address,
+                            categories: details.categories ?? place.categories,
+                            photoUrls: details.photos ?? place.photoUrls,
+                            openNow: details.openingHours?.openNow,
+                            priceLevel: details.priceLevel ?? place.priceLevel,
+                            avgRating: place.avgRating ?? details.rating,
+                            visitCount: place.visitCount,
+                            userRatingsTotal: details.userRatingsTotal,
+                            phone: details.phone ?? place.phone,
+                            website: details.website ?? place.website,
+                            openingHours: details.openingHours?.weekdayText,
+                            createdAt: place.createdAt,
+                            updatedAt: place.updatedAt
+                        )
+                        print("✅ [Enrich] Updated: \(details.name)")
+                    } catch {
+                        print("⚠️ [Enrich] Failed for \(googlePlaceId): \(error)")
+                    }
+                }
             }
+            
+            beenToPlaces = enrichedPlaces
+                .filter { ($0.visitCount ?? 0) > 0 }
+                .map { place in
+                    PlaceWithVisits(
+                        place: place,
+                        visitCount: place.visitCount ?? 0,
+                        friendVisitCount: 0,
+                        visits: []
+                    )
+                }
             
         } catch let urlError as URLError where urlError.code == .cancelled {
             print("ℹ️ [Discover] Cancelled")
@@ -319,7 +346,7 @@ class DiscoverViewModel: ObservableObject {
         do {
             let queryItems = [
                 URLQueryItem(name: "id", value: "eq.\(placeId)"),
-                URLQueryItem(name: "select", value: "id,provider,google_place_id,apple_place_id,name_en,name_ja,name_zh,lat,lng,city,ward,categories,created_at,updated_at")
+                URLQueryItem(name: "select", value: "id,provider,google_place_id,apple_place_id,name_en,name_ja,name_zh,lat,lng,city,ward,categories,phone,website,address,avg_rating,visit_count,created_at,updated_at")
             ]
             
             let places: [Place] = try await client.get(
@@ -339,7 +366,7 @@ class DiscoverViewModel: ObservableObject {
     func toggleFollowingFilter() {
         showFollowingOnly.toggle()
         Task {
-            await fetchBeenToPlaces()
+            await fetchBeenToPlaces()  // ✅ No 'in:' needed here
         }
     }
     
@@ -350,8 +377,6 @@ class DiscoverViewModel: ObservableObject {
     
     // MARK: - Refresh Single Place
     
-    /// ✅ Efficiently refresh only one place after visit is posted
-    /// Only fetches updated stats for the specific place, doesn't reload entire map
     func refreshPlace(placeId: String) async {
         print("🔄 [Refresh] Updating place: \(placeId)")
         
@@ -371,7 +396,6 @@ class DiscoverViewModel: ObservableObject {
                 return
             }
             
-            // ✅ Update in beenToPlaces if it exists there
             if let index = beenToPlaces.firstIndex(where: { $0.place.id == placeId }) {
                 let oldItem = beenToPlaces[index]
                 beenToPlaces[index] = PlaceWithVisits(
@@ -383,7 +407,6 @@ class DiscoverViewModel: ObservableObject {
                 print("✅ [Refresh] Updated in beenToPlaces")
             }
             
-            // ✅ Update selectedPlace if it's the same place
             if selectedPlace?.id == placeId {
                 selectedPlace = updatedPlace
                 print("✅ [Refresh] Updated selectedPlace")

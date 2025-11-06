@@ -22,6 +22,7 @@ struct PlaceInfoCard: View {
             phoneNumber: place.phoneNumber,
             website: place.website,
             photoUrls: place.photoUrls,
+            googlePlaceId: place.googlePlaceId,  // ✅ Pass Google Place ID
             primaryButtonTitle: "Add Visit",
             primaryButtonAction: {
                 showAddVisit = true

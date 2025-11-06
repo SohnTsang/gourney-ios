@@ -104,8 +104,8 @@ extension Place: Codable {
     
     enum CodingKeys: String, CodingKey {
         case id, provider
-        case googlePlaceId = "google_place_id"
-        case applePlaceId = "apple_place_id"
+        case googlePlaceId
+        case applePlaceId
         case nameEn, nameJa, nameZh
         case lat, lng
         case formattedAddress = "address"       // ✅ Backend sends "address"
