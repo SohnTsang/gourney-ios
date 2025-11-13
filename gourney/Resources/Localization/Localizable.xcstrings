@@ -43,6 +43,9 @@
         }
       }
     },
+    "%lld/50" : {
+
+    },
     "%lld%%" : {
 
     },
@@ -52,7 +55,19 @@
     "0" : {
 
     },
+    "Add" : {
+
+    },
+    "Add Cover Photo" : {
+
+    },
     "Add Photos" : {
+
+    },
+    "Add Places" : {
+
+    },
+    "Add places from Discover or your visits" : {
 
     },
     "Add the first photo here!" : {
@@ -68,6 +83,9 @@
 
     },
     "Already taken" : {
+
+    },
+    "Anyone can view" : {
 
     },
     "auth.city.label" : {
@@ -832,6 +850,9 @@
     "Cancel" : {
 
     },
+    "Change" : {
+
+    },
     "Check Your Email!" : {
 
     },
@@ -850,13 +871,13 @@
     "Closed" : {
 
     },
-    "Coming in Day 5" : {
-
-    },
     "Coming in Day 6" : {
 
     },
     "Coming in Day 7" : {
+
+    },
+    "Coming soon" : {
 
     },
     "common.cancel" : {
@@ -1051,6 +1072,29 @@
         }
       }
     },
+    "common.remove" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "削除"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除"
+          }
+        }
+      }
+    },
     "common.save" : {
       "comment" : "Save",
       "extractionState" : "manual",
@@ -1111,7 +1155,19 @@
     "Copy All URLs" : {
 
     },
+    "Create" : {
+
+    },
     "Create Account" : {
+
+    },
+    "Create Your First List" : {
+
+    },
+    "Delete" : {
+
+    },
+    "Description" : {
 
     },
     "Directions" : {
@@ -1509,6 +1565,9 @@
     "Following" : {
 
     },
+    "Following's Lists" : {
+
+    },
     "Gourney" : {
 
     },
@@ -1518,8 +1577,471 @@
     "Join Gourney today" : {
 
     },
+    "List name" : {
+
+    },
     "Lists" : {
 
+    },
+    "lists.add_place.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add to List"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リストに追加"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新增至清單"
+          }
+        }
+      }
+    },
+    "lists.create_first" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Create List"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リストを作成"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "建立清單"
+          }
+        }
+      }
+    },
+    "lists.create.create" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Create"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "作成"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "建立"
+          }
+        }
+      }
+    },
+    "lists.create.description_hint" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add a description for your list"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リストの説明を追加"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "為您的清單新增描述"
+          }
+        }
+      }
+    },
+    "lists.create.description_label" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Description (Optional)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "説明（任意）"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "描述（選填）"
+          }
+        }
+      }
+    },
+    "lists.create.private_hint" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Only you can see this list"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "あなただけがこのリストを見ることができます"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只有您可以看到此清單"
+          }
+        }
+      }
+    },
+    "lists.create.public" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Make Public"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "公開する"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "公開"
+          }
+        }
+      }
+    },
+    "lists.create.public_hint" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Anyone can see this list"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "誰でもこのリストを見ることができます"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "任何人都可以看到此清單"
+          }
+        }
+      }
+    },
+    "lists.create.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New List"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新しいリスト"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新增清單"
+          }
+        }
+      }
+    },
+    "lists.create.title_label" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "List Name"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リスト名"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清單名稱"
+          }
+        }
+      }
+    },
+    "lists.create.title_placeholder" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "e.g., Tokyo Ramen Guide"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "例：東京ラーメンガイド"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "例如：東京拉麵指南"
+          }
+        }
+      }
+    },
+    "lists.default_section" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Default Lists"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "デフォルトリスト"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "預設清單"
+          }
+        }
+      }
+    },
+    "lists.default.favorites" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Favorites"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "お気に入り"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "我的最愛"
+          }
+        }
+      }
+    },
+    "lists.default.want_to_try" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Want to Try"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "行きたい"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "想去"
+          }
+        }
+      }
+    },
+    "lists.detail.add_places" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add Places"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "場所を追加"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新增地點"
+          }
+        }
+      }
+    },
+    "lists.detail.empty.message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start adding your favorite places to this list"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "お気に入りの場所をこのリストに追加しましょう"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開始將您最喜歡的地點新增到此清單"
+          }
+        }
+      }
+    },
+    "lists.detail.empty.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Places Yet"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "まだ場所がありません"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚無地點"
+          }
+        }
+      }
+    },
+    "lists.empty.message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Create your first list to organize your favorite restaurants"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "お気に入りのレストランを整理するために最初のリストを作成しましょう"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "建立您的第一個清單來整理您最喜歡的餐廳"
+          }
+        }
+      }
+    },
+    "lists.empty.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Lists Yet"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リストがありません"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚無清單"
+          }
+        }
+      }
+    },
+    "lists.my_lists" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "My Lists"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "マイリスト"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "我的清單"
+          }
+        }
+      }
     },
     "Loading place info..." : {
 
@@ -1632,13 +2154,25 @@
     "Logged in as:" : {
 
     },
+    "Name" : {
+
+    },
+    "New List" : {
+
+    },
     "No places found" : {
+
+    },
+    "No Places Yet" : {
 
     },
     "No visit photos yet" : {
 
     },
     "OK" : {
+
+    },
+    "Only you can view" : {
 
     },
     "Open" : {
@@ -1651,6 +2185,9 @@
 
     },
     "OR" : {
+
+    },
+    "Organize your favorite spots" : {
 
     },
     "Password" : {
@@ -1842,6 +2379,9 @@
     "Please enable location access to see nearby places" : {
 
     },
+    "Popular Lists" : {
+
+    },
     "Post" : {
 
     },
@@ -1851,16 +2391,31 @@
     "Profile" : {
 
     },
+    "Public" : {
+
+    },
+    "Quick Lists" : {
+
+    },
     "Rating" : {
 
     },
+    "Remove" : {
+
+    },
     "Required" : {
+
+    },
+    "Save" : {
 
     },
     "Search for a place" : {
 
     },
     "Search for places" : {
+
+    },
+    "Search places - Coming soon" : {
 
     },
     "Search places..." : {
@@ -1972,7 +2527,6 @@
       }
     },
     "tab.lists" : {
-      "comment" : "Lists tab label",
       "extractionState" : "manual",
       "localizations" : {
         "en" : {

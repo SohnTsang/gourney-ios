@@ -204,7 +204,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         
         Task { @MainActor in
             // Clear Google Places session cache
-            GooglePlaceDetailFetcher.shared.handleMemoryWarning()
+            await GooglePlaceDetailFetcher.shared.handleMemoryWarning()
             
             // Clear URL cache
             URLCache.shared.removeAllCachedResponses()

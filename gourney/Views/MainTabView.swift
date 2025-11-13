@@ -1,5 +1,5 @@
 // Views/MainTabView.swift
-// Week 7 Day 4: Main tab bar with AddVisitView enabled for testing
+// Week 7 Day 3-4: Main tab bar with Lists enabled
 
 import SwiftUI
 
@@ -28,8 +28,8 @@ struct MainTabView: View {
                 }
                 .tag(1)
             
-            // Tab 3: Lists (Placeholder for Day 5)
-            ListsPlaceholderView()
+            // Tab 3: Lists (ACTIVE - Day 3-4)
+            ListsView()
                 .tabItem {
                     Label(
                         NSLocalizedString("tab.lists", comment: ""),
@@ -62,26 +62,7 @@ struct MainTabView: View {
     }
 }
 
-// MARK: - Placeholder Views (Temporary for Days 5-7)
-
-struct ListsPlaceholderView: View {
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 16) {
-                Image(systemName: "list.bullet.rectangle")
-                    .font(.system(size: 64))
-                    .foregroundColor(.secondary)
-                Text("Lists")
-                    .font(.headline)
-                    .foregroundColor(.secondary)
-                Text("Coming in Day 5")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            .navigationTitle("Lists")
-        }
-    }
-}
+// MARK: - Placeholder Views (Temporary for Days 6-7)
 
 struct FeedPlaceholderView: View {
     var body: some View {
