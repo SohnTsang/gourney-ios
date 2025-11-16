@@ -1,3 +1,6 @@
+// gourney/ViewModels/ListsViewModel.swift
+// UPDATED: Fixed lists-get-following to use POST
+
 import Foundation
 import Combine
 
@@ -93,13 +96,15 @@ class ListsViewModel: ObservableObject {
         }
     }
     
+    // ✅ FIXED: Changed from GET to POST
     func loadFollowingLists() async {
         isLoading = true
         errorMessage = nil
         
         do {
-            let response: FollowingListsResponse = try await client.get(
-                path: "/functions/v1/lists-get-following?limit=20",
+            let response: FollowingListsResponse = try await client.post(
+                path: "/functions/v1/lists-get-following",
+                body: [:],
                 requiresAuth: true
             )
             

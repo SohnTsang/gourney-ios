@@ -30,8 +30,10 @@ class SupabaseClient {
         self.authToken = token
         if let token = token {
             UserDefaults.standard.set(token, forKey: "auth_token")
+            print("✅ [Token] Saved new token (ends: ...\(token.suffix(10)))")
         } else {
             UserDefaults.standard.removeObject(forKey: "auth_token")
+            print("🗑️ [Token] Cleared token")
         }
     }
     
@@ -86,6 +88,7 @@ class SupabaseClient {
         // Auth token
         if requiresAuth, let token = getAuthToken() {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            print("🔐 [Request] Using token (ends: ...\(token.suffix(10)))")
         }
         
         // Body
@@ -153,42 +156,63 @@ class SupabaseClient {
             break
         case 401:
             // Try a one-time refresh + retry if this endpoint needs auth
-            if requiresAuth, let refresh = authRefreshHandler, await refresh() {
-                // Rebuild and retry once with a new token
-                let retry = try buildRequest(
-                    path: path,
-                    method: method,
-                    body: body,
-                    queryItems: queryItems,
-                    requiresAuth: requiresAuth
-                )
-                let (retryData, retryResp) = try await URLSession.shared.data(for: retry)
-                guard let retryHTTP = retryResp as? HTTPURLResponse else {
-                    throw APIError.invalidResponse
-                }
-                if retryHTTP.statusCode == 401 {
-                    print("⚠️ [API] 401 again after refresh from \(retry.url?.path ?? "(unknown)")")
-                }
-                switch retryHTTP.statusCode {
-                case 200...299:
-                    let decoder = JSONDecoder()
-                    decoder.keyDecodingStrategy = .convertFromSnakeCase
-                    decoder.dateDecodingStrategy = .iso8601
-                    return try decoder.decode(T.self, from: retryData)
-                case 429:
-                    throw APIError.rateLimitExceeded
-                case 400...499:
-                    if let errorResponse = try? JSONDecoder().decode(ErrorResponse.self, from: retryData) {
-                        throw APIError.badRequest(errorResponse.message)
+            if requiresAuth, let refresh = authRefreshHandler {
+                print("🔄 [API] Attempting token refresh...")
+                
+                let refreshed = await refresh()
+                
+                if refreshed {
+                    print("✅ [API] Token refreshed successfully, retrying request...")
+                    
+                    // CRITICAL: Small delay to ensure token is fully saved
+                    try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                    
+                    // Rebuild request with new token
+                    let retry = try buildRequest(
+                        path: path,
+                        method: method,
+                        body: body,
+                        queryItems: queryItems,
+                        requiresAuth: requiresAuth
+                    )
+                    
+                    let (retryData, retryResp) = try await URLSession.shared.data(for: retry)
+                    guard let retryHTTP = retryResp as? HTTPURLResponse else {
+                        throw APIError.invalidResponse
                     }
-                    throw APIError.badRequest("Request failed")
-                case 500...599:
-                    throw APIError.serverError
-                default:
-                    throw APIError.unknown
+                    
+                    print("📥 [API] Retry response: \(retryHTTP.statusCode)")
+                    
+                    if retryHTTP.statusCode == 401 {
+                        print("❌ [API] Still 401 after refresh - token may be invalid")
+                        if let currentToken = getAuthToken() {
+                            print("🔍 [Debug] Current token ends: ...\(currentToken.suffix(10))")
+                        }
+                    }
+                    
+                    switch retryHTTP.statusCode {
+                    case 200...299:
+                        let decoder = JSONDecoder()
+                        decoder.keyDecodingStrategy = .convertFromSnakeCase
+                        decoder.dateDecodingStrategy = .iso8601
+                        return try decoder.decode(T.self, from: retryData)
+                    case 429:
+                        throw APIError.rateLimitExceeded
+                    case 400...499:
+                        if let errorResponse = try? JSONDecoder().decode(ErrorResponse.self, from: retryData) {
+                            throw APIError.badRequest(errorResponse.message)
+                        }
+                        throw APIError.badRequest("Request failed")
+                    case 500...599:
+                        throw APIError.serverError
+                    default:
+                        throw APIError.unknown
+                    }
+                } else {
+                    print("❌ [API] Token refresh failed")
                 }
             }
-            // No refresh available or not an auth’d call → bubble up
+            // No refresh available or not an auth'd call → bubble up
             throw APIError.unauthorized
         case 429:
             throw APIError.rateLimitExceeded
