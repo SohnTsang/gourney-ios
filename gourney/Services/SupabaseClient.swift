@@ -89,6 +89,18 @@ class SupabaseClient {
         if requiresAuth, let token = getAuthToken() {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             print("🔐 [Request] Using token (ends: ...\(token.suffix(10)))")
+
+            // DIAGNOSTIC: Decode and validate token before using it
+            if let diagnostics = TokenDiagnostics.decode(token) {
+                let minutesLeft = Int(diagnostics.timeUntilExpiry / 60)
+                if diagnostics.isExpired {
+                    print("⚠️ [Token] WARNING: Token is EXPIRED!")
+                } else if diagnostics.needsRefresh {
+                    print("⚠️ [Token] Token expires in \(minutesLeft) minutes")
+                } else {
+                    print("✅ [Token] Valid for \(minutesLeft) minutes")
+                }
+            }
         }
         
         // Body
@@ -163,10 +175,11 @@ class SupabaseClient {
                 
                 if refreshed {
                     print("✅ [API] Token refreshed successfully, retrying request...")
-                    
-                    // CRITICAL: Small delay to ensure token is fully saved
-                    try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
-                    
+
+                    // CRITICAL: Delay to ensure token is fully propagated
+                    // Edge functions may need more time than REST endpoints
+                    try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+
                     // Rebuild request with new token
                     let retry = try buildRequest(
                         path: path,
@@ -182,11 +195,24 @@ class SupabaseClient {
                     }
                     
                     print("📥 [API] Retry response: \(retryHTTP.statusCode)")
-                    
+
                     if retryHTTP.statusCode == 401 {
                         print("❌ [API] Still 401 after refresh - token may be invalid")
                         if let currentToken = getAuthToken() {
                             print("🔍 [Debug] Current token ends: ...\(currentToken.suffix(10))")
+                        }
+
+                        // DIAGNOSTIC: Show error response from edge function
+                        if let errorText = String(data: retryData, encoding: .utf8) {
+                            print("🔍 [Debug] Error response: \(errorText)")
+                        }
+
+                        // DIAGNOSTIC: Check if this is an edge function call
+                        if path.contains("/functions/") {
+                            print("⚠️ [Edge Function] This is an Edge Function - checking common issues:")
+                            print("   1. Edge function might not be reading Authorization header correctly")
+                            print("   2. Edge function might need 'apikey' header for Supabase client")
+                            print("   3. Edge function RLS policies might be rejecting the request")
                         }
                     }
                     
