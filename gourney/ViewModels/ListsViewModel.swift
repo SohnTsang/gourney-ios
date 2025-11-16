@@ -37,15 +37,6 @@ struct FollowingListAPIResponse: Codable {
     let userHandle: String
     let userDisplayName: String?
     let userAvatarUrl: String?
-    
-    enum CodingKeys: String, CodingKey {
-        case id, title, visibility, itemCount, createdAt
-        case userId = "user_id"
-        case coverPhotoUrl = "cover_photo_url"
-        case userHandle = "user_handle"
-        case userDisplayName = "user_display_name"
-        case userAvatarUrl = "user_avatar_url"
-    }
 }
 
 // MARK: - ViewModel
@@ -56,12 +47,40 @@ class ListsViewModel: ObservableObject {
     @Published var customLists: [RestaurantList] = []
     @Published var followingLists: [FollowingListItem] = []
     @Published var isLoading = false
+    @Published var isLoadingMore = false
     @Published var errorMessage: String?
+    
+    // Pagination
+    private var myListsPage = 0
+    private var followingPage = 0
+    private let pageSize = 15
+    @Published var hasMoreMyLists = true
+    @Published var hasMoreFollowing = true
     
     private let client = SupabaseClient.shared
     
-    func loadLists() async {
-        isLoading = true
+    // Clear memory when leaving tab
+    func clearMemory() {
+        defaultLists.removeAll(keepingCapacity: false)
+        customLists.removeAll(keepingCapacity: false)
+        followingLists.removeAll(keepingCapacity: false)
+        myListsPage = 0
+        followingPage = 0
+        hasMoreMyLists = true
+        hasMoreFollowing = true
+        print("🧹 [Lists] Memory cleared")
+    }
+    
+    func loadLists(loadMore: Bool = false) async {
+        if loadMore {
+            guard hasMoreMyLists && !isLoadingMore else { return }
+            isLoadingMore = true
+        } else {
+            isLoading = true
+            myListsPage = 0
+            hasMoreMyLists = true
+        }
+        
         errorMessage = nil
         
         do {
@@ -69,7 +88,9 @@ class ListsViewModel: ObservableObject {
                 throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Not authenticated"])
             }
             
-            await createDefaultListsIfNeeded()
+            if !loadMore {
+                await createDefaultListsIfNeeded()
+            }
             
             let body: [String: Any] = [:]
             let response: ListsGetResponse = try await client.post(
@@ -78,27 +99,51 @@ class ListsViewModel: ObservableObject {
                 requiresAuth: true
             )
             
-            let lists = response.lists
-            
-            defaultLists = lists.filter {
+            let allLists = response.lists
+            let defaults = allLists.filter {
                 $0.title == NSLocalizedString("lists.default.want_to_try", comment: "") ||
                 $0.title == NSLocalizedString("lists.default.favorites", comment: "")
             }
-            customLists = lists.filter { list in
-                !defaultLists.contains { $0.id == list.id }
+            let customs = allLists.filter { list in
+                !defaults.contains { $0.id == list.id }
             }
             
+            // Pagination for custom lists only
+            let startIndex = myListsPage * pageSize
+            let endIndex = min(startIndex + pageSize, customs.count)
+            
+            if loadMore {
+                if startIndex < customs.count {
+                    customLists.append(contentsOf: Array(customs[startIndex..<endIndex]))
+                }
+            } else {
+                defaultLists = defaults
+                customLists = endIndex > 0 ? Array(customs[0..<endIndex]) : []
+            }
+            
+            hasMoreMyLists = endIndex < customs.count
+            myListsPage += 1
+            
             isLoading = false
+            isLoadingMore = false
         } catch {
             errorMessage = error.localizedDescription
             isLoading = false
+            isLoadingMore = false
             print("❌ [Lists] Load error: \(error)")
         }
     }
     
-    // ✅ FIXED: Changed from GET to POST
-    func loadFollowingLists() async {
-        isLoading = true
+    func loadFollowingLists(loadMore: Bool = false) async {
+        if loadMore {
+            guard hasMoreFollowing && !isLoadingMore else { return }
+            isLoadingMore = true
+        } else {
+            isLoading = true
+            followingPage = 0
+            hasMoreFollowing = true
+        }
+        
         errorMessage = nil
         
         do {
@@ -108,7 +153,7 @@ class ListsViewModel: ObservableObject {
                 requiresAuth: true
             )
             
-            followingLists = response.lists.map { apiList in
+            let allFollowing = response.lists.map { apiList in
                 FollowingListItem(
                     id: apiList.id,
                     title: apiList.title,
@@ -123,11 +168,28 @@ class ListsViewModel: ObservableObject {
                 )
             }
             
+            // Pagination
+            let startIndex = followingPage * pageSize
+            let endIndex = min(startIndex + pageSize, allFollowing.count)
+            
+            if loadMore {
+                if startIndex < allFollowing.count {
+                    followingLists.append(contentsOf: Array(allFollowing[startIndex..<endIndex]))
+                }
+            } else {
+                followingLists = endIndex > 0 ? Array(allFollowing[0..<endIndex]) : []
+            }
+            
+            hasMoreFollowing = endIndex < allFollowing.count
+            followingPage += 1
+            
             isLoading = false
+            isLoadingMore = false
             print("✅ [Lists] Loaded \(followingLists.count) following lists")
         } catch {
             errorMessage = error.localizedDescription
             isLoading = false
+            isLoadingMore = false
             print("❌ [Lists] Following lists error: \(error)")
         }
     }

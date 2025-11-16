@@ -1,5 +1,5 @@
 // Views/Discover/PlacesListView.swift
-// ✅ List view for places with distance sorting
+// ✅ Updated to use shared PlaceRowView component
 
 import SwiftUI
 import CoreLocation
@@ -10,7 +10,7 @@ struct PlacesListView: View {
     @Environment(\.colorScheme) private var colorScheme
     
     @StateObject private var locationManager = LocationManager.shared
-    @State private var displayedCount = 20  // ✅ ADD THIS
+    @State private var displayedCount = 20
 
     var body: some View {
         GeometryReader { geometry in
@@ -20,8 +20,8 @@ struct PlacesListView: View {
                         emptyState
                     } else {
                         ForEach(displayedPlaces) { item in
-                            PlaceListRow(
-                                item: item,
+                            PlaceRowView(
+                                item: PlaceRowItem(from: item),
                                 distance: locationManager.formattedDistance(from: item.coordinate)
                             )
                             .contentShape(Rectangle())
@@ -50,7 +50,6 @@ struct PlacesListView: View {
         }
     }
     
-    // ✅ ADD THESE
     private var displayedPlaces: [PlaceListItem] {
         Array(places.prefix(displayedCount))
     }
@@ -63,6 +62,7 @@ struct PlacesListView: View {
         HStack {
             Spacer()
             ProgressView()
+                .tint(Color(red: 1.0, green: 0.4, blue: 0.4))
                 .padding(.vertical, 20)
             Spacer()
         }
@@ -77,13 +77,14 @@ struct PlacesListView: View {
             }
         }
     }
+    
     // MARK: - Empty State
     
     private var emptyState: some View {
         VStack(spacing: 16) {
             Image(systemName: "map.circle")
                 .font(.system(size: 60))
-                .foregroundColor(.secondary.opacity(0.5))
+                .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4).opacity(0.3))
             
             Text("No places found")
                 .font(.system(size: 18, weight: .semibold))
@@ -99,154 +100,7 @@ struct PlacesListView: View {
     }
 }
 
-// MARK: - Place List Row
-
-struct PlaceListRow: View {
-    let item: PlaceListItem
-    let distance: String?
-    @Environment(\.colorScheme) private var colorScheme
-    
-    var body: some View {
-        HStack(spacing: 12) {
-            // Thumbnail
-            placeThumbnail
-            
-            // Content
-            VStack(alignment: .leading, spacing: 6) {
-                // Name
-                Text(item.name)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(colorScheme == .dark ? .white : .black)
-                    .lineLimit(1)
-                
-                // Rating + stars + visit count on same line
-                HStack(spacing: 4) {
-                    // Rating
-                    if let rating = item.rating {
-                        Text(String(format: "%.1f", rating))
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(.primary)
-                        
-                        HStack(spacing: 2) {
-                            ForEach(0..<5) { index in
-                                Image(systemName: index < Int(rating.rounded()) ? "star.fill" : "star")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(index < Int(rating.rounded()) ? .yellow : .gray)
-                            }
-                        }
-                    } else {
-                        Text("0")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(.primary)
-                        
-                        HStack(spacing: 2) {
-                            ForEach(0..<5) { index in
-                                Image(systemName: "star")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.gray)
-                            }
-                        }
-                    }
-                    
-                    // Visit count
-                    if let visitCount = item.visitCount {
-                        Text("·")
-                            .foregroundColor(.secondary)
-                        Text("\(visitCount) \(visitCount == 1 ? "visit" : "visits")")
-                            .font(.system(size: 13))
-                            .foregroundColor(.secondary)
-                    }
-                }
-                .onAppear {
-                    print("🔍 [PlaceListRow] Item: \(item.name)")
-                    print("   Rating: \(item.rating?.description ?? "nil")")
-                    print("   Visit Count: \(item.visitCount?.description ?? "nil")")
-                    print("   Address: \(item.address ?? "nil")")
-                }
-                
-                // Address below rating
-                if let address = item.address, !address.isEmpty {
-                    HStack(spacing: 4) {
-                        Image(systemName: "mappin.circle.fill")
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary)
-                        Text(address)
-                            .font(.system(size: 12))
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-                    }
-                } else {
-                    Text("🚨 No address data")
-                        .font(.system(size: 12))
-                        .foregroundColor(.red)
-                }
-                
-                // Distance
-                if let distance = distance {
-                    HStack(spacing: 4) {
-                        Image(systemName: "location.fill")
-                            .font(.system(size: 10))
-                            .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
-                        Text(distance)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
-                    }
-                }
-            }
-            
-            Spacer()
-            
-            // Chevron
-            Image(systemName: "chevron.right")
-                .font(.system(size: 14))
-                .foregroundColor(.secondary.opacity(0.5))
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(colorScheme == .dark ? Color(.systemBackground) : Color.white)
-    }
-    
-    // MARK: - Thumbnail
-    
-    @ViewBuilder
-    private var placeThumbnail: some View {
-        if let photoUrl = item.photoUrl, let url = URL(string: photoUrl) {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .success(let image):
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: 70, height: 70)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                        .onDisappear {
-                            // Force image to be released when scrolled away
-                            URLCache.shared.removeCachedResponse(for: URLRequest(url: url))
-                        }
-                case .failure, .empty:
-                    placeholderThumbnail
-                @unknown default:
-                    placeholderThumbnail
-                }
-            }
-        } else {
-            placeholderThumbnail
-        }
-    }
-    
-    private var placeholderThumbnail: some View {
-        RoundedRectangle(cornerRadius: 8)
-            .fill(Color(.systemGray5))
-            .frame(width: 70, height: 70)
-            .overlay {
-                Image(systemName: "fork.knife")
-                    .font(.system(size: 24))
-                    .foregroundColor(.secondary.opacity(0.5))
-            }
-    }
-}
-
-// MARK: - Place List Item Model
+// MARK: - Place List Item Model (Keep for backward compatibility)
 
 struct PlaceListItem: Identifiable, Hashable {
     let id: String
@@ -268,12 +122,12 @@ struct PlaceListItem: Identifiable, Hashable {
         self.id = place.id
         self.name = place.displayName
         self.coordinate = place.coordinate
-        self.rating = place.rating
+        self.rating = place.avgRating
         self.priceLevel = place.priceLevel
         self.category = place.categories?.first
         self.photoUrl = place.photoUrls?.first
         self.isVisited = true
-        self.visitCount = place.visitCount  // ✅ FIX: Was nil
+        self.visitCount = place.visitCount
         self.address = place.formattedAddress
         self.place = place
         self.searchResult = nil
@@ -283,7 +137,7 @@ struct PlaceListItem: Identifiable, Hashable {
         self.id = placeWithVisits.place.id
         self.name = placeWithVisits.place.displayName
         self.coordinate = placeWithVisits.place.coordinate
-        self.rating = placeWithVisits.place.rating
+        self.rating = placeWithVisits.place.avgRating
         self.priceLevel = placeWithVisits.place.priceLevel
         self.category = placeWithVisits.place.categories?.first
         self.photoUrl = placeWithVisits.place.photoUrls?.first
@@ -315,5 +169,19 @@ struct PlaceListItem: Identifiable, Hashable {
     
     func hash(into hasher: inout Hasher) {
         hasher.combine(id)
+    }
+}
+
+// MARK: - Extension to convert PlaceListItem to PlaceRowItem
+
+extension PlaceRowItem {
+    init(from placeListItem: PlaceListItem) {
+        self.id = placeListItem.id
+        self.name = placeListItem.name
+        self.rating = placeListItem.rating
+        self.visitCount = placeListItem.visitCount
+        self.address = placeListItem.address
+        self.photoUrl = placeListItem.photoUrl
+        self.coordinate = placeListItem.coordinate
     }
 }

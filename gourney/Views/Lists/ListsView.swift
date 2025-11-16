@@ -126,10 +126,36 @@ struct ListsView: View {
                                                     }
                                                 }
                                             }
+                                            .onAppear {
+                                                // Load more when reaching last item
+                                                if list.id == filteredLists.last?.id {
+                                                    Task {
+                                                        await viewModel.loadLists(loadMore: true)
+                                                    }
+                                                }
+                                            }
                                     }
                                 } else if selectedFilter == .following {
                                     ForEach(viewModel.followingLists) { followingList in
                                         FollowingListGridItem(item: followingList)
+                                            .onAppear {
+                                                // Load more when reaching last item
+                                                if followingList.id == viewModel.followingLists.last?.id {
+                                                    Task {
+                                                        await viewModel.loadFollowingLists(loadMore: true)
+                                                    }
+                                                }
+                                            }
+                                    }
+                                }
+                                
+                                // Loading indicator at bottom
+                                if viewModel.isLoadingMore {
+                                    GridRow {
+                                        ProgressView()
+                                            .tint(Color(red: 1.0, green: 0.4, blue: 0.4))
+                                            .gridCellColumns(3)
+                                            .padding(.vertical, 20)
                                     }
                                 }
                             }
@@ -217,6 +243,10 @@ struct ListsView: View {
             .task {
                 await viewModel.loadLists()
             }
+            .onDisappear {
+                // Clear memory when leaving Lists tab
+                viewModel.clearMemory()
+            }
             .onChange(of: selectedFilter) { _, newValue in
                 if newValue == .following && viewModel.followingLists.isEmpty {
                     Task {
@@ -265,44 +295,73 @@ struct ListGridItem: View {
     let showLikes: Bool
     
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            Rectangle()
-                .fill(Color.gray.opacity(0.15))
-                .aspectRatio(1, contentMode: .fit)
-            
-            if let coverUrl = list.coverPhotoUrl {
-                AsyncImage(url: URL(string: coverUrl)) { image in
+        ZStack(alignment: .topTrailing) {
+            // Background/Placeholder
+            if list.coverPhotoUrl == nil {
+                // Elegant placeholder design
+                ZStack {
+                    LinearGradient(
+                        colors: [
+                            Color(red: 1.0, green: 0.4, blue: 0.4).opacity(0.2),
+                            Color(red: 1.0, green: 0.5, blue: 0.5).opacity(0.1)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    
+                    VStack(spacing: 8) {
+                        Image(systemName: "list.bullet.rectangle.portrait")
+                            .font(.system(size: 32))
+                            .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4).opacity(0.5))
+                    }
+                }
+            } else {
+                AsyncImage(url: URL(string: list.coverPhotoUrl!)) { image in
                     image.resizable().scaledToFill()
                 } placeholder: {
                     Color.gray.opacity(0.2)
                 }
             }
             
-            // Gradient overlay - more subtle/greyer
+            // Like count (top right)
+            if showLikes {
+                HStack(spacing: 3) {
+                    Image(systemName: "heart.fill")
+                        .font(.system(size: 9, weight: .semibold))
+                    Text("\(list.likesCount ?? 0)")
+                        .font(.system(size: 11, weight: .bold))
+                }
+                .foregroundColor(.white)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 4)
+                .background(
+                    Color.black.opacity(0.75)
+                )
+                .clipShape(Capsule())
+                .overlay(
+                    Capsule()
+                        .strokeBorder(Color.white.opacity(0.3), lineWidth: 0.5)
+                )
+                .shadow(color: .black.opacity(0.3), radius: 2, x: 0, y: 1)
+                .padding(6)
+            }
+            
+            // Title overlay (bottom)
             VStack(alignment: .leading, spacing: 4) {
+                Spacer()
+                
                 Text(list.title)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(.white)
-                    .lineLimit(1)
+                    .lineLimit(2)  // ✅ 2 lines
+                    .multilineTextAlignment(.leading)
                 
-                HStack(spacing: 8) {
-                    // Restaurant count
-                    HStack(spacing: 3) {
-                        Image(systemName: "mappin.circle.fill")
-                            .font(.system(size: 11))
-                        Text("\(list.itemCount ?? 0)")
-                            .font(.system(size: 11))
-                    }
-                    
-                    // Likes (only for public/friends)
-                    if showLikes {
-                        HStack(spacing: 3) {
-                            Image(systemName: "heart.fill")
-                                .font(.system(size: 11))
-                            Text("\(list.likesCount ?? 0)")
-                                .font(.system(size: 11))
-                        }
-                    }
+                // Restaurant count
+                HStack(spacing: 3) {
+                    Image(systemName: "mappin.circle.fill")
+                        .font(.system(size: 11))
+                    Text("\(list.itemCount ?? 0)")
+                        .font(.system(size: 11))
                 }
                 .foregroundColor(.white.opacity(0.9))
             }
@@ -310,12 +369,13 @@ struct ListGridItem: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 LinearGradient(
-                    colors: [.clear, .black.opacity(0.4)],
+                    colors: [.clear, .black.opacity(0.7)],
                     startPoint: .top,
                     endPoint: .bottom
                 )
             )
         }
+        .aspectRatio(1, contentMode: .fill)
         .clipShape(Rectangle())
     }
 }
@@ -326,42 +386,71 @@ struct FollowingListGridItem: View {
     let item: FollowingListItem
     
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            Rectangle()
-                .fill(Color.gray.opacity(0.15))
-                .aspectRatio(1, contentMode: .fit)
-            
-            if let coverUrl = item.coverPhotoUrl {
-                AsyncImage(url: URL(string: coverUrl)) { image in
+        ZStack(alignment: .topTrailing) {
+            // Background/Placeholder
+            if item.coverPhotoUrl == nil {
+                // Elegant placeholder design
+                ZStack {
+                    LinearGradient(
+                        colors: [
+                            Color(red: 1.0, green: 0.4, blue: 0.4).opacity(0.2),
+                            Color(red: 1.0, green: 0.5, blue: 0.5).opacity(0.1)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    
+                    VStack(spacing: 8) {
+                        Image(systemName: "list.bullet.rectangle.portrait")
+                            .font(.system(size: 32))
+                            .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4).opacity(0.5))
+                    }
+                }
+            } else {
+                AsyncImage(url: URL(string: item.coverPhotoUrl!)) { image in
                     image.resizable().scaledToFill()
                 } placeholder: {
                     Color.gray.opacity(0.2)
                 }
             }
             
-            // Gradient overlay
+            // Like count (top right)
+            HStack(spacing: 3) {
+                Image(systemName: "heart.fill")
+                    .font(.system(size: 9, weight: .semibold))
+                Text("\(item.likesCount ?? 0)")
+                    .font(.system(size: 11, weight: .bold))
+            }
+            .foregroundColor(.white)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .background(
+                Color.black.opacity(0.75)
+            )
+            .clipShape(Capsule())
+            .overlay(
+                Capsule()
+                    .strokeBorder(Color.white.opacity(0.3), lineWidth: 0.5)
+            )
+            .shadow(color: .black.opacity(0.3), radius: 2, x: 0, y: 1)
+            .padding(6)
+            
+            // Title overlay (bottom)
             VStack(alignment: .leading, spacing: 4) {
+                Spacer()
+                
                 Text(item.title)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(.white)
-                    .lineLimit(1)
+                    .lineLimit(2)  // ✅ 2 lines
+                    .multilineTextAlignment(.leading)
                 
-                HStack(spacing: 8) {
-                    // Restaurant count
-                    HStack(spacing: 3) {
-                        Image(systemName: "mappin.circle.fill")
-                            .font(.system(size: 11))
-                        Text("\(item.itemCount)")
-                            .font(.system(size: 11))
-                    }
-                    
-                    // Likes
-                    HStack(spacing: 3) {
-                        Image(systemName: "heart.fill")
-                            .font(.system(size: 11))
-                        Text("\(item.likesCount ?? 0)")
-                            .font(.system(size: 11))
-                    }
+                // Restaurant count
+                HStack(spacing: 3) {
+                    Image(systemName: "mappin.circle.fill")
+                        .font(.system(size: 11))
+                    Text("\(item.itemCount)")
+                        .font(.system(size: 11))
                 }
                 .foregroundColor(.white.opacity(0.9))
                 
@@ -374,12 +463,13 @@ struct FollowingListGridItem: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 LinearGradient(
-                    colors: [.clear, .black.opacity(0.4)],
+                    colors: [.clear, .black.opacity(0.7)],
                     startPoint: .top,
                     endPoint: .bottom
                 )
             )
         }
+        .aspectRatio(1, contentMode: .fill)
         .clipShape(Rectangle())
     }
 }

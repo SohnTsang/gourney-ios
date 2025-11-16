@@ -49,13 +49,13 @@
     "%lld%%" : {
 
     },
-    "🚨 No address data" : {
-
-    },
     "0" : {
 
     },
     "Add" : {
+
+    },
+    "Add a description (optional)" : {
 
     },
     "Add Cover Photo" : {
@@ -83,9 +83,6 @@
 
     },
     "Already taken" : {
-
-    },
-    "Anyone can view" : {
 
     },
     "auth.city.label" : {
@@ -1580,6 +1577,9 @@
     "Join Gourney today" : {
 
     },
+    "likes" : {
+
+    },
     "List name" : {
 
     },
@@ -2184,9 +2184,6 @@
     "OK" : {
 
     },
-    "Only you can view" : {
-
-    },
     "Open" : {
 
     },
@@ -2385,6 +2382,9 @@
         }
       }
     },
+    "places" : {
+
+    },
     "Please enable location access to see nearby places" : {
 
     },
@@ -2400,13 +2400,7 @@
     "Profile" : {
 
     },
-    "Public" : {
-
-    },
     "Rating" : {
-
-    },
-    "Remove" : {
 
     },
     "Required" : {
@@ -2421,7 +2415,7 @@
     "Search for places" : {
 
     },
-    "Search places - Coming soon" : {
+    "Search Places" : {
 
     },
     "Search places..." : {
@@ -2604,6 +2598,9 @@
 
     },
     "username" : {
+
+    },
+    "Visibility" : {
 
     },
     "We've sent a confirmation link to" : {
