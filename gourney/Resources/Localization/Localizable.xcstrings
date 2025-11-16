@@ -1161,7 +1161,10 @@
     "Create Account" : {
 
     },
-    "Create Your First List" : {
+    "Create List" : {
+
+    },
+    "Create your first list to organize restaurants" : {
 
     },
     "Delete" : {
@@ -1556,6 +1559,9 @@
     "Feed" : {
 
     },
+    "Filter Lists" : {
+
+    },
     "Filter options coming soon" : {
 
     },
@@ -1563,9 +1569,6 @@
 
     },
     "Following" : {
-
-    },
-    "Following's Lists" : {
 
     },
     "Gourney" : {
@@ -2160,6 +2163,15 @@
     "New List" : {
 
     },
+    "No lists from people you follow" : {
+
+    },
+    "No lists match your filters" : {
+
+    },
+    "No Lists Yet" : {
+
+    },
     "No places found" : {
 
     },
@@ -2185,9 +2197,6 @@
 
     },
     "OR" : {
-
-    },
-    "Organize your favorite spots" : {
 
     },
     "Password" : {
@@ -2392,9 +2401,6 @@
 
     },
     "Public" : {
-
-    },
-    "Quick Lists" : {
 
     },
     "Rating" : {

@@ -1,10 +1,57 @@
 import Foundation
 import Combine
 
+// MARK: - Following List Models
+
+struct FollowingListItem: Identifiable {
+    let id: String
+    let title: String
+    let userId: String
+    let visibility: String
+    let coverPhotoUrl: String?
+    let createdAt: String
+    let itemCount: Int
+    let userHandle: String
+    let userDisplayName: String?
+    let userAvatarUrl: String?
+    
+    // TODO: Add when backend implements list_likes table
+    var likesCount: Int? { return 0 }
+}
+
+struct FollowingListsResponse: Codable {
+    let lists: [FollowingListAPIResponse]
+}
+
+struct FollowingListAPIResponse: Codable {
+    let id: String
+    let title: String
+    let userId: String
+    let visibility: String
+    let coverPhotoUrl: String?
+    let createdAt: String
+    let itemCount: Int
+    let userHandle: String
+    let userDisplayName: String?
+    let userAvatarUrl: String?
+    
+    enum CodingKeys: String, CodingKey {
+        case id, title, visibility, itemCount, createdAt
+        case userId = "user_id"
+        case coverPhotoUrl = "cover_photo_url"
+        case userHandle = "user_handle"
+        case userDisplayName = "user_display_name"
+        case userAvatarUrl = "user_avatar_url"
+    }
+}
+
+// MARK: - ViewModel
+
 @MainActor
 class ListsViewModel: ObservableObject {
     @Published var defaultLists: [RestaurantList] = []
     @Published var customLists: [RestaurantList] = []
+    @Published var followingLists: [FollowingListItem] = []
     @Published var isLoading = false
     @Published var errorMessage: String?
     
@@ -46,12 +93,44 @@ class ListsViewModel: ObservableObject {
         }
     }
     
+    func loadFollowingLists() async {
+        isLoading = true
+        errorMessage = nil
+        
+        do {
+            let response: FollowingListsResponse = try await client.get(
+                path: "/functions/v1/lists-get-following?limit=20",
+                requiresAuth: true
+            )
+            
+            followingLists = response.lists.map { apiList in
+                FollowingListItem(
+                    id: apiList.id,
+                    title: apiList.title,
+                    userId: apiList.userId,
+                    visibility: apiList.visibility,
+                    coverPhotoUrl: apiList.coverPhotoUrl,
+                    createdAt: apiList.createdAt,
+                    itemCount: apiList.itemCount,
+                    userHandle: apiList.userHandle,
+                    userDisplayName: apiList.userDisplayName,
+                    userAvatarUrl: apiList.userAvatarUrl
+                )
+            }
+            
+            isLoading = false
+            print("✅ [Lists] Loaded \(followingLists.count) following lists")
+        } catch {
+            errorMessage = error.localizedDescription
+            isLoading = false
+            print("❌ [Lists] Following lists error: \(error)")
+        }
+    }
+    
     private func createDefaultListsIfNeeded() async {
-        // Skip if we already have defaults OR any lists exist
         if !defaultLists.isEmpty || !customLists.isEmpty { return }
         
         do {
-            // Fetch all lists first to check if defaults exist
             let body: [String: Any] = [:]
             let response: ListsGetResponse = try await client.post(
                 path: "/functions/v1/lists-get",
@@ -65,24 +144,28 @@ class ListsViewModel: ObservableObject {
             let hasWantToTry = response.lists.contains { $0.title == wantToTryTitle }
             let hasFavorites = response.lists.contains { $0.title == favoritesTitle }
             
-            // Only create if missing
-            if !hasWantToTry {
-                let _: EmptyResponse = try await client.post(
-                    path: "/functions/v1/lists-create",
-                    body: ["title": wantToTryTitle, "visibility": "private"],
-                    requiresAuth: true
-                )
-            }
+            if hasWantToTry && hasFavorites { return }
             
-            if !hasFavorites {
-                let _: EmptyResponse = try await client.post(
-                    path: "/functions/v1/lists-create",
-                    body: ["title": favoritesTitle, "visibility": "private"],
-                    requiresAuth: true
-                )
-            }
+            print("⚠️ [Lists] Default lists missing - should be created by database trigger")
         } catch {
-            print("⚠️ [Lists] Failed to create default lists: \(error)")
+            print("❌ [Lists] Check defaults error: \(error)")
+        }
+    }
+    
+    func deleteList(listId: String) async -> Bool {
+        do {
+            let _: EmptyResponse = try await client.delete(
+                path: "/functions/v1/lists-delete/\(listId)",
+                requiresAuth: true
+            )
+            
+            customLists.removeAll { $0.id == listId }
+            print("✅ [Lists] Deleted list: \(listId)")
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            print("❌ [Lists] Delete error: \(error)")
+            return false
         }
     }
     
@@ -94,13 +177,16 @@ class ListsViewModel: ObservableObject {
                 "visibility": visibility
             ]
             
-            let _: EmptyResponse = try await client.post(
+            let response: CreateListResponse = try await client.post(
                 path: "/functions/v1/lists-create",
                 body: body,
                 requiresAuth: true
             )
             
-            await loadLists()
+            let newList = response.list
+            customLists.insert(newList, at: 0)
+            
+            print("✅ [Lists] Created: \(newList.title)")
             return true
         } catch {
             errorMessage = error.localizedDescription
@@ -108,28 +194,4 @@ class ListsViewModel: ObservableObject {
             return false
         }
     }
-    
-    func deleteList(listId: String) async -> Bool {
-        do {
-            let _: EmptyResponse = try await client.delete(
-                path: "/functions/v1/lists-delete?list_id=\(listId)",
-                requiresAuth: true
-            )
-            
-            await loadLists()
-            return true
-        } catch {
-            errorMessage = error.localizedDescription
-            print("❌ [Lists] Delete error: \(error)")
-            return false
-        }
-    }
 }
-
-// MARK: - Response Models
-
-struct ListsGetResponse: Codable {
-    let lists: [RestaurantList]
-}
-
-struct EmptyResponse: Codable {}

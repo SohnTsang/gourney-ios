@@ -218,6 +218,8 @@ struct EmptyPlacesView: View {
     }
 }
 
+// MARK: - ViewModel
+
 @MainActor
 class ListDetailViewModel: ObservableObject {
     @Published var places: [ListItem] = []
@@ -289,10 +291,7 @@ class ListDetailViewModel: ObservableObject {
     }
 }
 
-struct ListDetailResponse: Codable {
-    let list: RestaurantList
-    let items: [ListItem]
-}
+// MARK: - Settings Sheet
 
 struct ListSettingsSheet: View {
     let list: RestaurantList

@@ -1,5 +1,5 @@
 // Models/RestaurantList.swift
-// ✅ FIXED: No CodingKeys needed - SupabaseClient auto-converts snake_case
+// Updated with likes_count for social features
 
 import Foundation
 
@@ -11,6 +11,9 @@ struct RestaurantList: Codable, Identifiable {
     let itemCount: Int?
     let coverPhotoUrl: String?
     let createdAt: String
+    
+    // TODO: Add when backend implements list_likes table
+    var likesCount: Int? { return 0 }
     
     // Computed property if you need Date
     var createdDate: Date? {
@@ -31,4 +34,21 @@ struct ListItem: Codable, Identifiable {
     let notes: String?
     let addedAt: String
     var place: Place?
+}
+
+// MARK: - Empty Response
+struct EmptyResponse: Codable {}
+
+// MARK: - Lists Response Models
+struct ListsGetResponse: Codable {
+    let lists: [RestaurantList]
+}
+
+struct CreateListResponse: Codable {
+    let list: RestaurantList
+}
+
+struct ListDetailResponse: Codable {
+    let list: RestaurantList
+    let items: [ListItem]
 }
