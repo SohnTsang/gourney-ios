@@ -464,9 +464,8 @@ struct AddVisitView: View {
             // ✅ BLOCK EVERYTHING when submitting OR search overlay is up
             .disabled(viewModel.isSubmitting || viewModel.showSearchOverlay)
             
-            // ✅ SIMPLE LOADING - No progress, just spinner
             if viewModel.isSubmitting {
-                loadingOverlay
+                LoadingOverlay(message: "Posting your visit...")
             }
             
             if let index = viewModel.selectedPhotoIndex {
@@ -911,28 +910,6 @@ struct AddVisitView: View {
                 }
                 Spacer()
             }
-        }
-    }
-    
-    // ✅ SIMPLE LOADING - Just a spinner, no progress
-    private var loadingOverlay: some View {
-        ZStack {
-            Color.black.opacity(0.5).ignoresSafeArea()
-            
-            VStack(spacing: 20) {
-                ProgressView()
-                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                    .scaleEffect(1.5)
-                
-                Text("Posting your visit...")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundColor(.white)
-            }
-            .padding(40)
-            .background(
-                RoundedRectangle(cornerRadius: 20)
-                    .fill(.ultraThinMaterial)
-            )
         }
     }
 }

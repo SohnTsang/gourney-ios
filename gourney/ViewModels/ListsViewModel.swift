@@ -17,9 +17,7 @@ struct FollowingListItem: Identifiable {
     let userHandle: String
     let userDisplayName: String?
     let userAvatarUrl: String?
-    
-    // TODO: Add when backend implements list_likes table
-    var likesCount: Int? { return 0 }
+    let likesCount: Int?  // Changed to stored property
 }
 
 struct FollowingListsResponse: Codable {
@@ -37,6 +35,7 @@ struct FollowingListAPIResponse: Codable {
     let userHandle: String
     let userDisplayName: String?
     let userAvatarUrl: String?
+    let likesCount: Int?
 }
 
 // MARK: - ViewModel
@@ -139,6 +138,7 @@ class ListsViewModel: ObservableObject {
             guard hasMoreFollowing && !isLoadingMore else { return }
             isLoadingMore = true
         } else {
+            // Don't reset the list immediately for smoother UI
             isLoading = true
             followingPage = 0
             hasMoreFollowing = true
@@ -164,24 +164,30 @@ class ListsViewModel: ObservableObject {
                     itemCount: apiList.itemCount,
                     userHandle: apiList.userHandle,
                     userDisplayName: apiList.userDisplayName,
-                    userAvatarUrl: apiList.userAvatarUrl
+                    userAvatarUrl: apiList.userAvatarUrl,
+                    likesCount: apiList.likesCount
                 )
             }
             
-            // Pagination
-            let startIndex = followingPage * pageSize
-            let endIndex = min(startIndex + pageSize, allFollowing.count)
-            
             if loadMore {
+                // Pagination - append
+                let startIndex = followingPage * pageSize
+                let endIndex = min(startIndex + pageSize, allFollowing.count)
+                
                 if startIndex < allFollowing.count {
                     followingLists.append(contentsOf: Array(allFollowing[startIndex..<endIndex]))
                 }
             } else {
-                followingLists = endIndex > 0 ? Array(allFollowing[0..<endIndex]) : []
+                // Fresh load - replace
+                followingLists = allFollowing
             }
             
-            hasMoreFollowing = endIndex < allFollowing.count
-            followingPage += 1
+            hasMoreFollowing = allFollowing.count > followingLists.count
+            if !loadMore {
+                followingPage = 1
+            } else {
+                followingPage += 1
+            }
             
             isLoading = false
             isLoadingMore = false

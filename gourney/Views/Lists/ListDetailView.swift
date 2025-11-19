@@ -6,142 +6,440 @@ import PhotosUI
 import Combine
 
 struct ListDetailView: View {
-    let list: RestaurantList
+    @State var list: RestaurantList
+    let onListUpdated: (() -> Void)?
+    let isReadOnly: Bool
+    let ownerHandle: String?  // Add owner handle for display
     
     @Environment(\.dismiss) var dismiss
     @StateObject private var viewModel = ListDetailViewModel()
     @StateObject private var locationManager = LocationManager.shared
     @State private var showAddPlace = false
     @State private var showSettings = false
+    @State private var showDeleteAlert = false
+    @State private var isDeleting = false
+    @State private var showMenu = false
+    @State private var isLiked = false
+    @State private var likesCount: Int = 0
+    @State private var isProcessingLike = false
+    @State private var selectedPlace: Place?
+    @State private var showPlaceDetail = false
+    @State private var showAddVisitFromDetail = false
+    @State private var refreshTrigger = UUID()
+    @State private var dragOffset: CGFloat = 0
     @Environment(\.colorScheme) private var colorScheme
     
+    // Check if this is a default list
+    private var isDefaultList: Bool {
+        let wantToTryTitle = NSLocalizedString("lists.default.want_to_try", comment: "")
+        let favoritesTitle = NSLocalizedString("lists.default.favorites", comment: "")
+        return list.title == wantToTryTitle || list.title == favoritesTitle
+    }
+    
+    init(list: RestaurantList, isReadOnly: Bool = false, ownerHandle: String? = nil, onListUpdated: (() -> Void)? = nil) {
+        self._list = State(initialValue: list)
+        self.isReadOnly = isReadOnly
+        self.ownerHandle = ownerHandle
+        self.onListUpdated = onListUpdated
+    }
+    
     var body: some View {
-        NavigationStack {
-            ZStack {
-                Color(colorScheme == .dark ? .black : .systemGroupedBackground).ignoresSafeArea()
-                
-                ScrollView {
-                    VStack(spacing: 0) {
-                        // Cover Image
-                        CoverImageView(
-                            coverUrl: list.coverPhotoUrl,
-                            onUpload: { image in
-                                await viewModel.uploadCover(listId: list.id, image: image)
-                            }
-                        )
+        GeometryReader { geometry in
+            VStack(spacing: 0) {
+                // Custom Navigation Bar
+                ZStack {
+                    // Left Button - X icon
+                    HStack {
+                        Button {
+                            dismiss()
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
+                        }
+                        .padding(.leading, 16)
+                        Spacer()
+                    }
+                    
+                    // Centered Title
+                    VStack(spacing: 4) {
+                        Text(list.title)
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundColor(.primary)
                         
-                        // List Info Section
-                        VStack(spacing: 12) {
-                            // Stats Row - Places on left, Likes on right
-                            HStack {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "mappin.circle.fill")
-                                        .font(.system(size: 16))
-                                        .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
-                                    Text("\(viewModel.places.count)")
-                                        .font(.system(size: 16, weight: .semibold))
-                                        .foregroundColor(.primary)
-                                    Text("places")
-                                        .font(.system(size: 14))
-                                        .foregroundColor(.secondary)
+                        // Show username for read-only lists
+                        if isReadOnly, let handle = ownerHandle {
+                            Text("@\(handle)")
+                                .font(.system(size: 13))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    
+                    // Right Button
+                    HStack {
+                        Spacer()
+                        if !isReadOnly {
+                            Button {
+                                withAnimation(.easeOut(duration: 0.2)) {
+                                    showMenu = true
                                 }
-                                
-                                Spacer()
-                                
-                                if list.visibility != "private" {
+                            } label: {
+                                Image(systemName: "ellipsis.circle")
+                                    .font(.system(size: 24))
+                                    .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
+                            }
+                            .padding(.trailing, 16)
+                        }
+                    }
+                }
+                .frame(height: 56)
+                .frame(maxWidth: .infinity)
+                .padding(.top, geometry.safeAreaInsets.top > 0 ? geometry.safeAreaInsets.top : 50)
+                .background(colorScheme == .dark ? Color.black : Color.white)
+                
+                // Content
+                ZStack {
+                    Color(colorScheme == .dark ? .black : .systemGroupedBackground).ignoresSafeArea()
+                    
+                    ScrollView {
+                        VStack(spacing: 0) {
+                            // Cover Image
+                            CoverImageView(
+                                coverUrl: list.coverPhotoUrl,
+                                isReadOnly: isReadOnly,
+                                onUpload: { image in
+                                    await viewModel.uploadCover(listId: list.id, image: image)
+                                }
+                            )
+                            
+                            // List Info Section
+                            VStack(spacing: 12) {
+                                // Stats Row - Places on left, Likes/Button on right
+                                HStack {
                                     HStack(spacing: 6) {
-                                        Image(systemName: "heart.fill")
+                                        Image(systemName: "mappin.circle.fill")
                                             .font(.system(size: 16))
                                             .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
-                                        Text("\(list.likesCount ?? 0)")
+                                        Text("\(viewModel.places.count)")
                                             .font(.system(size: 16, weight: .semibold))
                                             .foregroundColor(.primary)
-                                        Text("likes")
+                                        Text("places")
                                             .font(.system(size: 14))
                                             .foregroundColor(.secondary)
                                     }
-                                }
-                            }
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 12)
-                        }
-                        .background(colorScheme == .dark ? Color(.systemBackground) : Color.white)
-                        
-                        // Places List
-                        if viewModel.places.isEmpty && !viewModel.isLoading {
-                            EmptyPlacesView(showAddPlace: $showAddPlace)
-                        } else {
-                            LazyVStack(spacing: 0) {
-                                ForEach(viewModel.places) { item in
-                                    PlaceRowView(
-                                        item: PlaceRowItem(from: item),
-                                        distance: item.place.map { locationManager.formattedDistance(from: $0.coordinate) } ?? nil,
-                                        showRemoveButton: true,
-                                        onRemove: {
-                                            Task {
-                                                await viewModel.removePlace(listId: list.id, itemId: item.id)
+                                    
+                                    Spacer()
+                                    
+                                    if list.visibility != "private" {
+                                        if isReadOnly {
+                                            // Like button for other users' lists
+                                            Button {
+                                                Task {
+                                                    await toggleLike()
+                                                }
+                                            } label: {
+                                                HStack(spacing: 8) {
+                                                    Image(systemName: isLiked ? "heart.fill" : "heart")
+                                                        .font(.system(size: 24, weight: .medium))
+                                                        .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
+                                                        .scaleEffect(isProcessingLike ? 1.2 : 1.0)
+                                                        .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isProcessingLike)
+                                                    
+                                                    Text("\(likesCount)")
+                                                        .font(.system(size: 16, weight: .semibold))
+                                                        .foregroundColor(.primary)
+                                                        .onAppear {
+                                                            print("❤️ [UI] Heart icon rendered: isLiked=\(isLiked), likesCount=\(likesCount)")
+                                                        }
+                                                        .onChange(of: likesCount) { oldValue, newValue in
+                                                            print("❤️ [UI] likesCount changed: \(oldValue) → \(newValue)")
+                                                        }
+                                                }
+                                            }
+                                            .disabled(isProcessingLike)
+                                        } else {
+                                            // Like count display for own lists
+                                            HStack(spacing: 6) {
+                                                Image(systemName: "heart.fill")
+                                                    .font(.system(size: 16))
+                                                    .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
+                                                Text("\(likesCount)")
+                                                    .font(.system(size: 16, weight: .semibold))
+                                                    .foregroundColor(.primary)
+                                                Text("likes")
+                                                    .font(.system(size: 14))
+                                                    .foregroundColor(.secondary)
                                             }
                                         }
-                                    )
-                                    .contentShape(Rectangle())
-                                    
-                                    if item.id != viewModel.places.last?.id {
-                                        Divider()
-                                            .padding(.leading, 90)
                                     }
                                 }
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 12)
                             }
                             .background(colorScheme == .dark ? Color(.systemBackground) : Color.white)
+                            
+                            // Places List
+                            if viewModel.places.isEmpty && !viewModel.isLoading {
+                                EmptyPlacesView(showAddPlace: $showAddPlace, isReadOnly: isReadOnly)
+                            } else {
+                                LazyVStack(spacing: 0) {
+                                    ForEach(viewModel.places) { item in
+                                        PlaceRowView(
+                                            item: PlaceRowItem(from: item),
+                                            distance: item.place.map { locationManager.formattedDistance(from: $0.coordinate) } ?? nil,
+                                            showRemoveButton: !isReadOnly,
+                                            onRemove: {
+                                                Task {
+                                                    await viewModel.removePlace(listId: list.id, itemId: item.id)
+                                                }
+                                            }
+                                        )
+                                        .contentShape(Rectangle())
+                                        .onTapGesture {
+                                            if let place = item.place {
+                                                selectedPlace = place
+                                                showPlaceDetail = true
+                                            }
+                                        }
+                                        
+                                        if item.id != viewModel.places.last?.id {
+                                            Divider()
+                                                .padding(.leading, 90)
+                                        }
+                                    }
+                                }
+                                .background(colorScheme == .dark ? Color(.systemBackground) : Color.white)
+                            }
                         }
                     }
-                }
-                
-                if viewModel.isLoading {
-                    ProgressView()
-                        .tint(Color(red: 1.0, green: 0.4, blue: 0.4))
+                    
+                    if viewModel.isLoading {
+                        ProgressView()
+                            .tint(Color(red: 1.0, green: 0.4, blue: 0.4))
+                    }
                 }
             }
-            .navigationTitle(list.title)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button {
-                        showSettings = true
-                    } label: {
-                        Image(systemName: "ellipsis")
-                            .font(.system(size: 20, weight: .semibold))
-                            .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
-                    }
-                    .simultaneousGesture(LongPressGesture().onEnded { _ in
-                        showAddPlace = true
-                    })
-                    .contextMenu {
-                        Button {
-                            showAddPlace = true
-                        } label: {
-                            Label("Add Places", systemImage: "plus")
-                        }
-                        
-                        Button {
-                            showSettings = true
-                        } label: {
-                            Label("Settings", systemImage: "gear")
-                        }
-                    }
+            .task {
+                // Load places and get like status via completion
+                await viewModel.loadPlaces(listId: list.id) { hasLiked, count in
+                    isLiked = hasLiked
+                    likesCount = count
+                    print("🔵 [ListDetail] Set initial like state: liked=\(hasLiked), count=\(count)")
                 }
             }
             .sheet(isPresented: $showAddPlace) {
                 AddPlaceToListSheet(listId: list.id, viewModel: viewModel)
             }
-            .overlay {
-                if showSettings {
-                    ListSettingsSheet(list: list, isPresented: $showSettings)
+            .sheet(isPresented: $showPlaceDetail) {
+                if let place = selectedPlace {
+                    PlaceDetailSheet(
+                        placeId: place.id,
+                        displayName: place.displayName,
+                        lat: place.lat,
+                        lng: place.lng,
+                        formattedAddress: place.formattedAddress,
+                        phoneNumber: place.phone,
+                        website: place.website,
+                        photoUrls: place.photoUrls,
+                        googlePlaceId: place.googlePlaceId,
+                        primaryButtonTitle: "Add Visit",
+                        primaryButtonAction: {
+                            showAddVisitFromDetail = true
+                        },
+                        onDismiss: nil
+                    )
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.hidden)
+                    .id(refreshTrigger)
                 }
             }
-            .task {
-                await viewModel.loadPlaces(listId: list.id)
+            .fullScreenCover(isPresented: $showAddVisitFromDetail) {
+                if let place = selectedPlace {
+                    AddVisitView(
+                        prefilledPlace: PlaceSearchResult(from: place),
+                        showBackButton: true,
+                        onVisitPosted: { placeId in
+                            // Refresh the list and reload place detail
+                            Task {
+                                await viewModel.loadPlaces(listId: list.id)
+                                await MainActor.run {
+                                    refreshTrigger = UUID()
+                                }
+                            }
+                        }
+                    )
+                }
+            }
+            .overlay {
+                if showSettings {
+                    ListSettingsSheet(
+                        list: list,
+                        isPresented: $showSettings,
+                        onSave: { updatedList in
+                            list = updatedList
+                            onListUpdated?()
+                        }
+                    )
+                }
+            }
+            .overlay {
+                if showMenu {
+                    CustomContextMenu(
+                        items: {
+                            var items = [
+                                ContextMenuItem(
+                                    icon: "gear",
+                                    title: "Settings",
+                                    isDestructive: false,
+                                    action: {
+                                        showSettings = true
+                                    }
+                                )
+                            ]
+                            if !isDefaultList {
+                                items.append(
+                                    ContextMenuItem(
+                                        icon: "trash",
+                                        title: "Delete List",
+                                        isDestructive: true,
+                                        action: {
+                                            showDeleteAlert = true
+                                        }
+                                    )
+                                )
+                            }
+                            return items
+                        }(),
+                        isPresented: $showMenu,
+                        alignment: .topTrailing,
+                        offset: CGSize(width: -12, height: 60)
+                    )
+                }
+            }
+            .alert("Delete List", isPresented: $showDeleteAlert) {
+                Button("Cancel", role: .cancel) {}
+                Button("Delete", role: .destructive) {
+                    Task {
+                        await deleteList()
+                    }
+                }
+            } message: {
+                Text("Are you sure you want to delete \"\(list.title)\"? This action cannot be undone.")
+            }
+            .interactiveDismissDisabled(showSettings || showDeleteAlert || isDeleting)
+        }
+        .offset(y: dragOffset)
+        .gesture(
+            DragGesture()
+                .onChanged { value in
+                    if value.translation.height > 0 {
+                        dragOffset = value.translation.height
+                    }
+                }
+                .onEnded { value in
+                    if value.translation.height > 100 {
+                        dismiss()
+                    } else {
+                        withAnimation(.spring(response: 0.3)) {
+                            dragOffset = 0
+                        }
+                    }
+                }
+        )
+        .ignoresSafeArea()
+    }
+    
+    // MARK: - Delete List
+    
+    private func deleteList() async {
+        isDeleting = true
+        
+        do {
+            let _: EmptyResponse = try await SupabaseClient.shared.delete(
+                path: "/functions/v1/lists-delete/\(list.id)",
+                requiresAuth: true
+            )
+            
+            print("✅ [ListDetail] List deleted: \(list.title)")
+            
+            // Navigate back after successful delete
+            await MainActor.run {
+                isDeleting = false
+                onListUpdated?()
+                dismiss()
+            }
+        } catch {
+            print("❌ [ListDetail] Delete error: \(error)")
+            await MainActor.run {
+                isDeleting = false
             }
         }
+    }
+    
+    // MARK: - Like Functions
+    
+    private func toggleLike() async {
+        isProcessingLike = true
+        
+        // Optimistic UI update with haptic feedback
+        if #available(iOS 17.0, *) {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        }
+        
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+            isLiked.toggle()
+            likesCount += isLiked ? 1 : -1
+        }
+        
+        do {
+            // Call backend edge function - consistent with likes-toggle for visits
+            let body: [String: String] = ["list_id": list.id]
+            let client = SupabaseClient.shared
+            
+            struct ListLikeToggleResponse: Codable {
+                let listId: String?
+                let liked: Bool
+                let likeCount: Int
+                let createdAt: String?
+            }
+            
+            let response: ListLikeToggleResponse = try await client.post(
+                path: "/functions/v1/lists-like-toggle",
+                body: body,
+                requiresAuth: true
+            )
+            
+            // Update with actual server response
+            await MainActor.run {
+                isLiked = response.liked
+                likesCount = response.likeCount
+                
+                // Update the parent list object
+                list.likesCount = response.likeCount
+                
+                // Notify parent view to refresh if needed
+                onListUpdated?()
+            }
+            
+            print("✅ [List] Like toggled: \(response.liked ? "Liked" : "Unliked")")
+            
+        } catch {
+            // Revert on error
+            await MainActor.run {
+                withAnimation {
+                    isLiked.toggle()
+                    likesCount += isLiked ? 1 : -1
+                }
+                
+                // Show error feedback
+                if #available(iOS 17.0, *) {
+                    UINotificationFeedbackGenerator().notificationOccurred(.error)
+                }
+            }
+            print("❌ [List] Like toggle error: \(error)")
+        }
+        
+        isProcessingLike = false
     }
 }
 
@@ -149,6 +447,7 @@ struct ListDetailView: View {
 
 struct CoverImageView: View {
     let coverUrl: String?
+    let isReadOnly: Bool
     let onUpload: (UIImage) async -> Void
     
     @State private var selectedItem: PhotosPickerItem?
@@ -166,28 +465,30 @@ struct CoverImageView: View {
                 placeholderView
             }
             
-            PhotosPicker(selection: $selectedItem, matching: .images) {
-                HStack(spacing: 6) {
-                    Image(systemName: isUploading ? "arrow.triangle.2.circlepath" : "camera.fill")
-                    Text(coverUrl == nil ? "Add" : "Change")
-                        .fontWeight(.medium)
-                }
-                .font(.system(size: 14))
-                .foregroundColor(.white)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 7)
-                .background(
-                    LinearGradient(
-                        colors: [Color(red: 1.0, green: 0.4, blue: 0.4), Color(red: 0.95, green: 0.3, blue: 0.35)],
-                        startPoint: .leading,
-                        endPoint: .trailing
+            if !isReadOnly {
+                PhotosPicker(selection: $selectedItem, matching: .images) {
+                    HStack(spacing: 6) {
+                        Image(systemName: isUploading ? "arrow.triangle.2.circlepath" : "camera.fill")
+                        Text(coverUrl == nil ? "Add" : "Change")
+                            .fontWeight(.medium)
+                    }
+                    .font(.system(size: 14))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 7)
+                    .background(
+                        LinearGradient(
+                            colors: [Color(red: 1.0, green: 0.4, blue: 0.4), Color(red: 0.95, green: 0.3, blue: 0.35)],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
                     )
-                )
-                .clipShape(Capsule())
-                .shadow(color: .black.opacity(0.2), radius: 4, y: 2)
-                .padding(16)
+                    .clipShape(Capsule())
+                    .shadow(color: .black.opacity(0.2), radius: 4, y: 2)
+                    .padding(16)
+                }
+                .disabled(isUploading)
             }
-            .disabled(isUploading)
         }
         .frame(height: 200)
         .clipShape(Rectangle())
@@ -230,6 +531,7 @@ struct CoverImageView: View {
 
 struct EmptyPlacesView: View {
     @Binding var showAddPlace: Bool
+    var isReadOnly: Bool = false
     
     var body: some View {
         VStack(spacing: 20) {
@@ -242,26 +544,35 @@ struct EmptyPlacesView: View {
                     .font(.system(size: 20, weight: .semibold))
                     .foregroundColor(.primary)
                 
-                Text("Add places from Discover or your visits")
-                    .font(.system(size: 14))
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
+                if isReadOnly {
+                    Text("This list doesn't have any places")
+                        .font(.system(size: 14))
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                } else {
+                    Text("Add places from Discover or your visits")
+                        .font(.system(size: 14))
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                }
             }
             
-            Button(action: { showAddPlace = true }) {
-                Label("Add Places", systemImage: "plus")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(.white)
-                    .frame(width: 180, height: 48)
-                    .background(
-                        LinearGradient(
-                            colors: [Color(red: 1.0, green: 0.4, blue: 0.4), Color(red: 0.95, green: 0.3, blue: 0.35)],
-                            startPoint: .leading,
-                            endPoint: .trailing
+            if !isReadOnly {
+                Button(action: { showAddPlace = true }) {
+                    Label("Add Places", systemImage: "plus")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.white)
+                        .frame(width: 180, height: 48)
+                        .background(
+                            LinearGradient(
+                                colors: [Color(red: 1.0, green: 0.4, blue: 0.4), Color(red: 0.95, green: 0.3, blue: 0.35)],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
                         )
-                    )
-                    .clipShape(Capsule())
-                    .shadow(color: Color(red: 1.0, green: 0.4, blue: 0.4).opacity(0.3), radius: 8, y: 4)
+                        .clipShape(Capsule())
+                        .shadow(color: Color(red: 1.0, green: 0.4, blue: 0.4).opacity(0.3), radius: 8, y: 4)
+                }
             }
         }
         .frame(maxWidth: .infinity)
@@ -276,27 +587,67 @@ class ListDetailViewModel: ObservableObject {
     @Published var places: [ListItem] = []
     @Published var isLoading = false
     @Published var errorMessage: String?
+    @Published var likeStatus: (hasLiked: Bool, likesCount: Int)?
     
     private let client = SupabaseClient.shared
+    private var loadTask: Task<Void, Never>?
     
-    func loadPlaces(listId: String) async {
+    deinit {
+        // Cancel any ongoing tasks
+        loadTask?.cancel()
+        // Note: Can't directly mutate @Published properties here
+        print("🧹 [ListDetailVM] Cleaning up")
+    }
+    
+    func loadPlaces(listId: String, completion: ((Bool, Int) -> Void)? = nil) async {
+        // Cancel previous load task
+        loadTask?.cancel()
+        
         isLoading = true
         errorMessage = nil
         
-        do {
-            let body: [String: String] = ["list_id": listId]
-            let response: ListDetailResponse = try await client.post(
-                path: "/functions/v1/lists-get-detail",
-                body: body,
-                requiresAuth: true
-            )
-            
-            places = response.items
-            isLoading = false
-        } catch {
-            errorMessage = error.localizedDescription
-            isLoading = false
-        }
+        // Create task and AWAIT it
+        await withTaskCancellationHandler {
+            await Task {
+                do {
+                    // Use proper request format for lists-get-detail
+                    let body = ["list_id": listId]
+                    let response: ListDetailResponse = try await client.post(
+                        path: "/functions/v1/lists-get-detail",
+                        body: body,
+                        requiresAuth: true
+                    )
+                    
+                    // Check if task was cancelled
+                    if Task.isCancelled { return }
+                    
+                    await MainActor.run {
+                        places = response.items
+                        isLoading = false
+                        
+                        // Store like status
+                        likeStatus = (hasLiked: response.list.hasLiked, likesCount: response.list.likesCount)
+                        
+                        // Also call completion for backward compatibility
+                        completion?(response.list.hasLiked, response.list.likesCount)
+                        
+                        print("📊 [ListDetail] Stored like status: hasLiked=\(response.list.hasLiked), likesCount=\(response.list.likesCount)")
+                    }
+                    
+                    print("✅ [ListDetail] Loaded \(response.items.count) places, liked: \(response.list.hasLiked), count: \(response.list.likesCount)")
+                } catch {
+                    if !Task.isCancelled {
+                        await MainActor.run {
+                            errorMessage = error.localizedDescription
+                            isLoading = false
+                            likeStatus = (hasLiked: false, likesCount: 0)
+                            completion?(false, 0)
+                        }
+                        print("❌ [ListDetail] Load error: \(error)")
+                    }
+                }
+            }.value
+        } onCancel: { }
     }
     
     func removePlace(listId: String, itemId: String) async {
@@ -339,234 +690,6 @@ class ListDetailViewModel: ObservableObject {
             errorMessage = error.localizedDescription
             isLoading = false
         }
-    }
-}
-
-// MARK: - Settings Sheet
-
-struct ListSettingsSheet: View {
-    let list: RestaurantList
-    @Binding var isPresented: Bool
-    
-    @State private var title: String
-    @State private var description: String
-    @State private var selectedVisibility: String
-    @State private var isSaving = false
-    @Environment(\.colorScheme) private var colorScheme
-    
-    // Check if this is a default list
-    private var isDefaultList: Bool {
-        let wantToTryTitle = NSLocalizedString("lists.default.want_to_try", comment: "")
-        let favoritesTitle = NSLocalizedString("lists.default.favorites", comment: "")
-        return list.title == wantToTryTitle || list.title == favoritesTitle
-    }
-    
-    init(list: RestaurantList, isPresented: Binding<Bool>) {
-        self.list = list
-        self._isPresented = isPresented
-        _title = State(initialValue: list.title)
-        _description = State(initialValue: list.description ?? "")
-        _selectedVisibility = State(initialValue: list.visibility)
-    }
-    
-    var body: some View {
-        ZStack {
-            Color.black.opacity(0.4)
-                .ignoresSafeArea()
-                .onTapGesture {
-                    if !isSaving {
-                        isPresented = false
-                    }
-                }
-            
-            VStack(spacing: 0) {
-                // Header
-                HStack {
-                    Button("Cancel") {
-                        isPresented = false
-                    }
-                    .font(.system(size: 16))
-                    .foregroundColor(.primary)
-                    
-                    Spacer()
-                    
-                    Text("Settings")
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundColor(.primary)
-                    
-                    Spacer()
-                    
-                    Button("Save") {
-                        saveSettings()
-                    }
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(title.isEmpty ? .secondary : Color(red: 1.0, green: 0.4, blue: 0.4))
-                    .disabled(isSaving || title.isEmpty || isDefaultList)
-                    .opacity(isDefaultList ? 0 : 1)
-                }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 16)
-                
-                Divider()
-                
-                ScrollView {
-                    VStack(spacing: 24) {
-                        // Name
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Name")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundColor(.secondary)
-                            
-                            TextField("List name", text: $title)
-                                .textFieldStyle(.plain)
-                                .font(.system(size: 16))
-                                .foregroundColor(isDefaultList ? .secondary : .primary)
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 12)
-                                .background(isDefaultList ? Color(.systemGray5) : (colorScheme == .dark ? Color(.systemGray6) : Color.white))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 10)
-                                        .stroke(isDefaultList ? Color.clear : Color(.systemGray4), lineWidth: 1)
-                                )
-                                .clipShape(RoundedRectangle(cornerRadius: 10))
-                                .disabled(isDefaultList)
-                        }
-                        
-                        // Description
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Description")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundColor(.secondary)
-                            
-                            ZStack(alignment: .topLeading) {
-                                if description.isEmpty && !isDefaultList {
-                                    Text("Add a description (optional)")
-                                        .font(.system(size: 16))
-                                        .foregroundColor(.secondary.opacity(0.5))
-                                        .padding(.horizontal, 18)
-                                        .padding(.vertical, 16)
-                                }
-                                
-                                TextEditor(text: $description)
-                                    .font(.system(size: 16))
-                                    .foregroundColor(isDefaultList ? .secondary : .primary)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 8)
-                                    .frame(height: 100)
-                                    .scrollContentBackground(.hidden)
-                                    .background(isDefaultList ? Color(.systemGray5) : (colorScheme == .dark ? Color(.systemGray6) : Color.white))
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 10)
-                                            .stroke(isDefaultList ? Color.clear : Color(.systemGray4), lineWidth: 1)
-                                    )
-                                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                                    .disabled(isDefaultList)
-                            }
-                        }
-                        
-                        // Visibility
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("Visibility")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundColor(.secondary)
-                            
-                            VStack(spacing: 0) {
-                                VisibilityOption(
-                                    icon: "globe",
-                                    title: "Public",
-                                    subtitle: "Anyone can view",
-                                    isSelected: selectedVisibility == "public",
-                                    action: { selectedVisibility = "public" }
-                                )
-                                
-                                Divider()
-                                    .padding(.leading, 50)
-                                
-                                VisibilityOption(
-                                    icon: "person.2.fill",
-                                    title: "Friends",
-                                    subtitle: "Only followers can view",
-                                    isSelected: selectedVisibility == "friends",
-                                    action: { selectedVisibility = "friends" }
-                                )
-                                
-                                Divider()
-                                    .padding(.leading, 50)
-                                
-                                VisibilityOption(
-                                    icon: "lock.fill",
-                                    title: "Private",
-                                    subtitle: "Only you can view",
-                                    isSelected: selectedVisibility == "private",
-                                    action: { selectedVisibility = "private" }
-                                )
-                            }
-                            .background(colorScheme == .dark ? Color(.systemGray6) : Color.white)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 10)
-                                    .stroke(Color(.systemGray4), lineWidth: 1)
-                            )
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                        }
-                    }
-                    .padding(20)
-                }
-            }
-            .frame(width: min(UIScreen.main.bounds.width - 40, 400))
-            .frame(maxHeight: 600)
-            .background(colorScheme == .dark ? Color(.systemBackground) : Color(.systemGroupedBackground))
-            .clipShape(RoundedRectangle(cornerRadius: 20))
-            .shadow(color: .black.opacity(0.3), radius: 20, y: 10)
-        }
-    }
-    
-    private func saveSettings() {
-        Task {
-            isSaving = true
-            // Implement save via lists-update endpoint
-            isSaving = false
-            isPresented = false
-        }
-    }
-}
-
-struct VisibilityOption: View {
-    let icon: String
-    let title: String
-    let subtitle: String
-    let isSelected: Bool
-    let action: () -> Void
-    
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 12) {
-                Image(systemName: icon)
-                    .font(.system(size: 20))
-                    .foregroundColor(isSelected ? Color(red: 1.0, green: 0.4, blue: 0.4) : .secondary)
-                    .frame(width: 28)
-                
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundColor(.primary)
-                    Text(subtitle)
-                        .font(.system(size: 13))
-                        .foregroundColor(.secondary)
-                }
-                
-                Spacer()
-                
-                if isSelected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 22))
-                        .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
     }
 }
 

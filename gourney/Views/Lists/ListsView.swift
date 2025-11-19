@@ -13,6 +13,13 @@ struct ListsView: View {
     @State private var selectedList: RestaurantList?
     @State private var selectedFilter: ListFilter = .myLists
     @State private var refreshTask: Task<Void, Never>?
+    @State private var listToEdit: RestaurantList?
+    @State private var showSettings = false
+    @State private var showDeleteAlert = false
+    @State private var listToDelete: RestaurantList?
+    @State private var showContextMenu = false
+    @State private var contextMenuList: RestaurantList?
+    @State private var selectedFollowingList: FollowingListItem?
     
     // Visibility filters
     @State private var showPrivate = true
@@ -34,6 +41,127 @@ struct ListsView: View {
             case "public": return showPublic
             default: return true
             }
+        }
+    }
+    
+    @ViewBuilder
+    private var mainContent: some View {
+        ScrollView {
+            LazyVGrid(columns: [
+                GridItem(.flexible(), spacing: 2),
+                GridItem(.flexible(), spacing: 2),
+                GridItem(.flexible(), spacing: 2)
+            ], spacing: 2) {
+                if selectedFilter == .myLists {
+                    ForEach(filteredLists) { list in
+                        LongPressListItem(
+                            list: list,
+                            showLikes: list.visibility != "private",
+                            onTap: {
+                                selectedList = list
+                            },
+                            onLongPress: {
+                                contextMenuList = list
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                    showContextMenu = true
+                                }
+                            }
+                        )
+                            .onAppear {
+                                if list.id == filteredLists.last?.id {
+                                    Task {
+                                        await viewModel.loadLists(loadMore: true)
+                                    }
+                                }
+                            }
+                    }
+                } else if selectedFilter == .following {
+                    ForEach(viewModel.followingLists) { followingList in
+                        FollowingListGridItem(item: followingList)
+                            .onTapGesture {
+                                selectedFollowingList = followingList
+                            }
+                            .onAppear {
+                                // Load more when reaching last item
+                                if followingList.id == viewModel.followingLists.last?.id {
+                                    Task {
+                                        await viewModel.loadFollowingLists(loadMore: true)
+                                    }
+                                }
+                            }
+                    }
+                }
+                
+                // Loading indicator at bottom
+                if viewModel.isLoadingMore {
+                    GridRow {
+                        ProgressView()
+                            .tint(Color(red: 1.0, green: 0.4, blue: 0.4))
+                            .gridCellColumns(3)
+                            .padding(.vertical, 20)
+                    }
+                }
+            }
+            
+            // Empty states
+            if selectedFilter == .myLists && filteredLists.isEmpty && !viewModel.isLoading {
+                if showPrivate || showFriends || showPublic {
+                    EmptyListsView(showCreateList: $showCreateList)
+                        .padding(.top, 100)
+                } else {
+                    VStack(spacing: 16) {
+                        Image(systemName: "line.3.horizontal.decrease.circle")
+                            .font(.system(size: 48))
+                            .foregroundColor(.secondary.opacity(0.5))
+                        Text("No lists match your filters")
+                            .font(.system(size: 16))
+                            .foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 100)
+                }
+            }
+            
+            // Placeholder for Popular
+            if selectedFilter == .popular {
+                VStack(spacing: 16) {
+                    Image(systemName: "flame.fill")
+                        .font(.system(size: 48))
+                        .foregroundColor(.secondary.opacity(0.5))
+                    Text("Popular Lists")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(.primary)
+                    Text("Coming soon")
+                        .font(.system(size: 14))
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.top, 100)
+            }
+            
+            // Empty state for Following
+            if selectedFilter == .following && viewModel.followingLists.isEmpty && !viewModel.isLoading {
+                VStack(spacing: 16) {
+                    Image(systemName: "person.2.fill")
+                        .font(.system(size: 48))
+                        .foregroundColor(.secondary.opacity(0.5))
+                    Text("No lists from people you follow")
+                        .font(.system(size: 16))
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.top, 100)
+            }
+        }
+        .refreshable {
+            refreshTask?.cancel()
+            refreshTask = Task {
+                await viewModel.loadLists()
+                if selectedFilter == .following {
+                    await viewModel.loadFollowingLists()
+                }
+            }
+            await refreshTask?.value
         }
     }
     
@@ -96,130 +224,15 @@ struct ListsView: View {
                     .padding(.bottom, 0)
                     
                     // Content
-                    if viewModel.isLoading && viewModel.defaultLists.isEmpty && viewModel.customLists.isEmpty {
+                    if viewModel.isLoading &&
+                       ((selectedFilter == .myLists && viewModel.defaultLists.isEmpty && viewModel.customLists.isEmpty) ||
+                        (selectedFilter == .following && viewModel.followingLists.isEmpty)) {
                         Spacer()
                         ProgressView()
                             .tint(Color(red: 1.0, green: 0.4, blue: 0.4))
                         Spacer()
                     } else {
-                        ScrollView {
-                            LazyVGrid(columns: [
-                                GridItem(.flexible(), spacing: 2),
-                                GridItem(.flexible(), spacing: 2),
-                                GridItem(.flexible(), spacing: 2)
-                            ], spacing: 2) {
-                                if selectedFilter == .myLists {
-                                    ForEach(filteredLists) { list in
-                                        ListGridItem(list: list, showLikes: list.visibility != "private")
-                                            .onTapGesture {
-                                                selectedList = list
-                                            }
-                                            .contextMenu {
-                                                // Only allow deletion of custom lists
-                                                if !viewModel.defaultLists.contains(where: { $0.id == list.id }) {
-                                                    Button(role: .destructive) {
-                                                        Task {
-                                                            _ = await viewModel.deleteList(listId: list.id)
-                                                        }
-                                                    } label: {
-                                                        Label("Delete", systemImage: "trash")
-                                                    }
-                                                }
-                                            }
-                                            .onAppear {
-                                                // Load more when reaching last item
-                                                if list.id == filteredLists.last?.id {
-                                                    Task {
-                                                        await viewModel.loadLists(loadMore: true)
-                                                    }
-                                                }
-                                            }
-                                    }
-                                } else if selectedFilter == .following {
-                                    ForEach(viewModel.followingLists) { followingList in
-                                        FollowingListGridItem(item: followingList)
-                                            .onAppear {
-                                                // Load more when reaching last item
-                                                if followingList.id == viewModel.followingLists.last?.id {
-                                                    Task {
-                                                        await viewModel.loadFollowingLists(loadMore: true)
-                                                    }
-                                                }
-                                            }
-                                    }
-                                }
-                                
-                                // Loading indicator at bottom
-                                if viewModel.isLoadingMore {
-                                    GridRow {
-                                        ProgressView()
-                                            .tint(Color(red: 1.0, green: 0.4, blue: 0.4))
-                                            .gridCellColumns(3)
-                                            .padding(.vertical, 20)
-                                    }
-                                }
-                            }
-                            
-                            // Empty state
-                            if selectedFilter == .myLists && filteredLists.isEmpty && !viewModel.isLoading {
-                                if showPrivate || showFriends || showPublic {
-                                    EmptyListsView(showCreateList: $showCreateList)
-                                        .padding(.top, 100)
-                                } else {
-                                    VStack(spacing: 16) {
-                                        Image(systemName: "line.3.horizontal.decrease.circle")
-                                            .font(.system(size: 48))
-                                            .foregroundColor(.secondary.opacity(0.5))
-                                        Text("No lists match your filters")
-                                            .font(.system(size: 16))
-                                            .foregroundColor(.secondary)
-                                    }
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.top, 100)
-                                }
-                            }
-                            
-                            // Placeholder for Popular
-                            if selectedFilter == .popular {
-                                VStack(spacing: 16) {
-                                    Image(systemName: "flame.fill")
-                                        .font(.system(size: 48))
-                                        .foregroundColor(.secondary.opacity(0.5))
-                                    Text("Popular Lists")
-                                        .font(.system(size: 18, weight: .semibold))
-                                        .foregroundColor(.primary)
-                                    Text("Coming soon")
-                                        .font(.system(size: 14))
-                                        .foregroundColor(.secondary)
-                                }
-                                .frame(maxWidth: .infinity)
-                                .padding(.top, 100)
-                            }
-                            
-                            // Empty state for Following
-                            if selectedFilter == .following && viewModel.followingLists.isEmpty && !viewModel.isLoading {
-                                VStack(spacing: 16) {
-                                    Image(systemName: "person.2.fill")
-                                        .font(.system(size: 48))
-                                        .foregroundColor(.secondary.opacity(0.5))
-                                    Text("No lists from people you follow")
-                                        .font(.system(size: 16))
-                                        .foregroundColor(.secondary)
-                                }
-                                .frame(maxWidth: .infinity)
-                                .padding(.top, 100)
-                            }
-                        }
-                        .refreshable {
-                            refreshTask?.cancel()
-                            refreshTask = Task {
-                                await viewModel.loadLists()
-                                if selectedFilter == .following {
-                                    await viewModel.loadFollowingLists()
-                                }
-                            }
-                            await refreshTask?.value
-                        }
+                        mainContent
                     }
                 }
                 
@@ -235,17 +248,119 @@ struct ListsView: View {
                         isPresented: $showFilter
                     )
                 }
+                
+                if showSettings, let list = listToEdit {
+                    ListSettingsSheet(
+                        list: list,
+                        isPresented: $showSettings,
+                        onSave: { updatedList in
+                            if let index = viewModel.defaultLists.firstIndex(where: { $0.id == updatedList.id }) {
+                                viewModel.defaultLists[index] = updatedList
+                            } else if let index = viewModel.customLists.firstIndex(where: { $0.id == updatedList.id }) {
+                                viewModel.customLists[index] = updatedList
+                            }
+                            listToEdit = nil
+                        }
+                    )
+                }
+                
+                if showContextMenu, let list = contextMenuList {
+                    ListPreviewMenu(
+                        list: list,
+                        items: {
+                            var items = [
+                                ContextMenuItem(
+                                    icon: "gear",
+                                    title: "Settings",
+                                    isDestructive: false,
+                                    action: {
+                                        listToEdit = list
+                                        showSettings = true
+                                    }
+                                )
+                            ]
+                            if !viewModel.defaultLists.contains(where: { $0.id == list.id }) {
+                                items.append(
+                                    ContextMenuItem(
+                                        icon: "trash",
+                                        title: "Delete List",
+                                        isDestructive: true,
+                                        action: {
+                                            listToDelete = list
+                                            showDeleteAlert = true
+                                        }
+                                    )
+                                )
+                            }
+                            return items
+                        }(),
+                        isPresented: $showContextMenu
+                    )
+                    .transition(.opacity)
+                }
             }
             .navigationBarHidden(true)
-            .sheet(item: $selectedList) { list in
-                ListDetailView(list: list)
+            .fullScreenCover(item: $selectedList) { list in
+                ListDetailView(list: list) {
+                    Task {
+                        await viewModel.loadLists()
+                    }
+                }
+            }
+            .fullScreenCover(item: $selectedFollowingList) { followingItem in
+                ListDetailView(
+                    list: RestaurantList(
+                        id: followingItem.id,
+                        title: followingItem.title,
+                        description: nil,  // Following lists don't include description
+                        visibility: followingItem.visibility,
+                        itemCount: followingItem.itemCount,
+                        coverPhotoUrl: followingItem.coverPhotoUrl,
+                        createdAt: followingItem.createdAt,
+                        likesCount: followingItem.likesCount
+                    ),
+                    isReadOnly: true,
+                    ownerHandle: followingItem.userHandle,
+                    onListUpdated: {
+                        // Refresh following lists when like status changes
+                        Task {
+                            await viewModel.loadFollowingLists()
+                        }
+                    }
+                )
+            }
+            .alert("Delete List", isPresented: $showDeleteAlert) {
+                Button("Cancel", role: .cancel) {
+                    listToDelete = nil
+                }
+                Button("Delete", role: .destructive) {
+                    if let list = listToDelete {
+                        Task {
+                            _ = await viewModel.deleteList(listId: list.id)
+                            listToDelete = nil
+                        }
+                    }
+                }
+            } message: {
+                if let list = listToDelete {
+                    Text("Are you sure you want to delete \"\(list.title)\"? This action cannot be undone.")
+                }
             }
             .task {
                 await viewModel.loadLists()
             }
-            .onDisappear {
-                // Clear memory when leaving Lists tab
-                viewModel.clearMemory()
+            .onAppear {
+                // Reload if data was cleared
+                if viewModel.defaultLists.isEmpty && viewModel.customLists.isEmpty {
+                    Task {
+                        await viewModel.loadLists()
+                    }
+                }
+                if selectedFilter == .following && viewModel.followingLists.isEmpty {
+                    Task {
+                        await viewModel.loadFollowingLists()
+                    }
+                }
             }
             .onChange(of: selectedFilter) { _, newValue in
                 if newValue == .following && viewModel.followingLists.isEmpty {
@@ -274,7 +389,7 @@ struct FilterTab: View {
     
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 4) {
+            VStack(spacing: 8) {
                 Image(systemName: icon)
                     .font(.system(size: 20, weight: .semibold))
                     .foregroundColor(isSelected ? Color(red: 1.0, green: 0.4, blue: 0.4) : .secondary)
@@ -289,6 +404,31 @@ struct FilterTab: View {
 }
 
 // MARK: - List Grid Item (Own Lists)
+
+struct LongPressListItem: View {
+    let list: RestaurantList
+    let showLikes: Bool
+    let onTap: () -> Void
+    let onLongPress: () -> Void
+    
+    @State private var isPressed = false
+    
+    var body: some View {
+        ListGridItem(list: list, showLikes: showLikes)
+            .scaleEffect(isPressed ? 1.05 : 1.0)
+            .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isPressed)
+            .onTapGesture {
+                onTap()
+            }
+            .onLongPressGesture(minimumDuration: 0.4, pressing: { pressing in
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+                    isPressed = pressing
+                }
+            }) {
+                onLongPress()
+            }
+    }
+}
 
 struct ListGridItem: View {
     let list: RestaurantList
@@ -453,11 +593,6 @@ struct FollowingListGridItem: View {
                         .font(.system(size: 11))
                 }
                 .foregroundColor(.white.opacity(0.9))
-                
-                // User info
-                Text("@\(item.userHandle)")
-                    .font(.system(size: 10))
-                    .foregroundColor(.white.opacity(0.8))
             }
             .padding(8)
             .frame(maxWidth: .infinity, alignment: .leading)

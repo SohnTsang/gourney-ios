@@ -1,5 +1,5 @@
 // Views/MainTabView.swift
-// Week 7 Day 3-4: Main tab bar with Lists enabled
+// Week 7: Main tab bar with Rank tab added
 
 import SwiftUI
 
@@ -38,25 +38,35 @@ struct MainTabView: View {
                 }
                 .tag(2)
             
-            // Tab 4: Feed (Placeholder for Day 6)
-            FeedPlaceholderView()
+            // Tab 4: Rank (ACTIVE - Week 7)
+            RankView()
                 .tabItem {
                     Label(
-                        NSLocalizedString("tab.feed", comment: ""),
-                        systemImage: selectedTab == 3 ? "house.fill" : "house"
+                        NSLocalizedString("tab.rank", comment: ""),
+                        systemImage: selectedTab == 3 ? "trophy.fill" : "trophy"
                     )
                 }
                 .tag(3)
             
-            // Tab 5: Profile (Placeholder for Day 7)
+            // Tab 5: Feed (Placeholder for Day 6)
+            FeedPlaceholderView()
+                .tabItem {
+                    Label(
+                        NSLocalizedString("tab.feed", comment: ""),
+                        systemImage: selectedTab == 4 ? "house.fill" : "house"
+                    )
+                }
+                .tag(4)
+            
+            // Tab 6: Profile (Placeholder for Day 7)
             ProfilePlaceholderView()
                 .tabItem {
                     Label(
                         NSLocalizedString("tab.profile", comment: ""),
-                        systemImage: selectedTab == 4 ? "person.fill" : "person"
+                        systemImage: selectedTab == 5 ? "person.fill" : "person"
                     )
                 }
-                .tag(4)
+                .tag(5)
         }
         .tint(.blue)
     }

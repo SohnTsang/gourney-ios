@@ -48,6 +48,12 @@ class SupabaseClient {
         return nil
     }
     
+    // Get current user ID from JWT token
+    func getCurrentUserId() -> String? {
+        guard let token = getAuthToken() else { return nil }
+        return TokenDiagnostics.decode(token)?.userId
+    }
+    
     func clearAuthToken() {
         authToken = nil
         UserDefaults.standard.removeObject(forKey: "auth_token")
@@ -259,6 +265,10 @@ class SupabaseClient {
     
     func put<T: Decodable>(path: String, body: [String: Any], queryItems: [URLQueryItem]? = nil, requiresAuth: Bool = true) async throws -> T {
         return try await request(path: path, method: "PUT", body: body, queryItems: queryItems, requiresAuth: requiresAuth)
+    }
+    
+    func patch<T: Decodable>(path: String, body: [String: Any], queryItems: [URLQueryItem]? = nil, requiresAuth: Bool = true) async throws -> T {
+        return try await request(path: path, method: "PATCH", body: body, queryItems: queryItems, requiresAuth: requiresAuth)
     }
     
     func delete<T: Decodable>(path: String, queryItems: [URLQueryItem]? = nil, requiresAuth: Bool = true) async throws -> T {
@@ -723,7 +733,9 @@ extension SupabaseClient {
             print("\n⚠️ TEST INCOMPLETE")
             print("💡 May need to sign in again")
         }
-        
+        func patch<T: Decodable>(path: String, body: [String: Any], queryItems: [URLQueryItem]? = nil, requiresAuth: Bool = true) async throws -> T {
+            return try await request(path: path, method: "PATCH", body: body, queryItems: queryItems, requiresAuth: requiresAuth)
+        }
         print("\n" + String(repeating: "=", count: 60) + "\n")
     }
 }
