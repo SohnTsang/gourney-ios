@@ -82,7 +82,6 @@ struct ListsView: View {
                                 selectedFollowingList = followingList
                             }
                             .onAppear {
-                                // Load more when reaching last item
                                 if followingList.id == viewModel.followingLists.last?.id {
                                     Task {
                                         await viewModel.loadFollowingLists(loadMore: true)
@@ -90,10 +89,45 @@ struct ListsView: View {
                                 }
                             }
                     }
+                } else if selectedFilter == .popular {
+                    ForEach(viewModel.popularLists) { popularList in
+                        PopularListGridItem(
+                            item: popularList,
+                            onTap: {
+                                selectedList = RestaurantList(
+                                    id: popularList.id,
+                                    title: popularList.title,
+                                    description: popularList.description,
+                                    visibility: popularList.visibility,
+                                    itemCount: popularList.itemCount,
+                                    coverPhotoUrl: nil,
+                                    createdAt: popularList.createdAt,
+                                    likesCount: popularList.likesCount,
+                                    viewCount: popularList.viewCount
+                                )
+                            }
+                        )
+                        .onAppear {
+                            // Only load more if:
+                            // 1. Last item in list
+                            // 2. NOT currently loading
+                            // 3. Have enough items to warrant pagination (20+)
+                            if popularList.id == viewModel.popularLists.last?.id &&
+                               !viewModel.isLoadingMore &&
+                               viewModel.popularLists.count >= 20 {
+                                Task {
+                                    await viewModel.loadPopularLists(loadMore: true)
+                                }
+                            }
+                        }
+                    }
                 }
                 
-                // Loading indicator at bottom
-                if viewModel.isLoadingMore {
+                // Loading indicator at bottom (only during pagination)
+                if viewModel.isLoadingMore &&
+                   ((selectedFilter == .myLists && !viewModel.customLists.isEmpty) ||
+                    (selectedFilter == .following && !viewModel.followingLists.isEmpty) ||
+                    (selectedFilter == .popular && !viewModel.popularLists.isEmpty)) {
                     GridRow {
                         ProgressView()
                             .tint(Color(red: 1.0, green: 0.4, blue: 0.4))
@@ -122,25 +156,8 @@ struct ListsView: View {
                 }
             }
             
-            // Placeholder for Popular
-            if selectedFilter == .popular {
-                VStack(spacing: 16) {
-                    Image(systemName: "flame.fill")
-                        .font(.system(size: 48))
-                        .foregroundColor(.secondary.opacity(0.5))
-                    Text("Popular Lists")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundColor(.primary)
-                    Text("Coming soon")
-                        .font(.system(size: 14))
-                        .foregroundColor(.secondary)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.top, 100)
-            }
-            
             // Empty state for Following
-            if selectedFilter == .following && viewModel.followingLists.isEmpty && !viewModel.isLoading {
+            if selectedFilter == .following && viewModel.followingLists.isEmpty && !viewModel.isLoading && !viewModel.isLoadingMore {
                 VStack(spacing: 16) {
                     Image(systemName: "person.2.fill")
                         .font(.system(size: 48))
@@ -152,13 +169,35 @@ struct ListsView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.top, 100)
             }
+            
+            // Empty state for Popular
+            if selectedFilter == .popular && viewModel.popularLists.isEmpty && !viewModel.isLoading && !viewModel.isLoadingMore {
+                VStack(spacing: 16) {
+                    Image(systemName: "flame.fill")
+                        .font(.system(size: 48))
+                        .foregroundColor(.secondary.opacity(0.5))
+                    Text("No Popular Lists Yet")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(.primary)
+                    Text("Lists with 3+ likes and 3+ places will appear here")
+                        .font(.system(size: 14))
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 40)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.top, 100)
+            }
         }
+        .scrollContentBackground(.hidden)
         .refreshable {
             refreshTask?.cancel()
             refreshTask = Task {
                 await viewModel.loadLists()
                 if selectedFilter == .following {
                     await viewModel.loadFollowingLists()
+                } else if selectedFilter == .popular {
+                    await viewModel.loadPopularLists()
                 }
             }
             await refreshTask?.value
@@ -219,20 +258,24 @@ struct ListsView: View {
                             action: { selectedFilter = .following }
                         )
                     }
-                    .padding(.horizontal, 20)
+                    .frame(maxWidth: .infinity)
                     .padding(.top, 16)
                     .padding(.bottom, 0)
                     
                     // Content
-                    if viewModel.isLoading &&
+                    if viewModel.isLoading && !viewModel.isLoadingMore &&
                        ((selectedFilter == .myLists && viewModel.defaultLists.isEmpty && viewModel.customLists.isEmpty) ||
-                        (selectedFilter == .following && viewModel.followingLists.isEmpty)) {
+                        (selectedFilter == .following && viewModel.followingLists.isEmpty) ||
+                        (selectedFilter == .popular && viewModel.popularLists.isEmpty)) {
+                        let _ = print("🔄 [ListsView] Showing centered spinner - filter: \(selectedFilter), isLoading: \(viewModel.isLoading)")
                         Spacer()
                         ProgressView()
                             .tint(Color(red: 1.0, green: 0.4, blue: 0.4))
                         Spacer()
                     } else {
+                        let _ = print("📋 [ListsView] Showing main content - filter: \(selectedFilter)")
                         mainContent
+                            .id(selectedFilter)
                     }
                 }
                 
@@ -301,11 +344,14 @@ struct ListsView: View {
             }
             .navigationBarHidden(true)
             .fullScreenCover(item: $selectedList) { list in
-                ListDetailView(list: list) {
+                ListDetailView(list: list, onListUpdated: { listId, newCount in
+                    viewModel.updateListItemCount(listId: listId, newCount: newCount)
+                    
+                    // Refresh to get updated cover photo
                     Task {
-                        await viewModel.loadLists()
+                        await viewModel.refreshSingleList(listId: listId)
                     }
-                }
+                })
             }
             .fullScreenCover(item: $selectedFollowingList) { followingItem in
                 ListDetailView(
@@ -321,7 +367,7 @@ struct ListsView: View {
                     ),
                     isReadOnly: true,
                     ownerHandle: followingItem.userHandle,
-                    onListUpdated: {
+                    onListUpdated: { _, _ in
                         // Refresh following lists when like status changes
                         Task {
                             await viewModel.loadFollowingLists()
@@ -329,44 +375,50 @@ struct ListsView: View {
                     }
                 )
             }
-            .alert("Delete List", isPresented: $showDeleteAlert) {
-                Button("Cancel", role: .cancel) {
-                    listToDelete = nil
-                }
-                Button("Delete", role: .destructive) {
-                    if let list = listToDelete {
-                        Task {
-                            _ = await viewModel.deleteList(listId: list.id)
-                            listToDelete = nil
-                        }
-                    }
-                }
-            } message: {
+            .customDeleteAlert(
+                isPresented: $showDeleteAlert,
+                title: "Delete List",
+                message: "This action cannot be undone.",
+                confirmTitle: "Delete"
+            ) {
                 if let list = listToDelete {
-                    Text("Are you sure you want to delete \"\(list.title)\"? This action cannot be undone.")
+                    Task {
+                        _ = await viewModel.deleteList(listId: list.id)
+                        listToDelete = nil
+                    }
                 }
             }
             .task {
                 await viewModel.loadLists()
             }
             .onAppear {
-                // Reload if data was cleared
-                if viewModel.defaultLists.isEmpty && viewModel.customLists.isEmpty {
-                    Task {
-                        await viewModel.loadLists()
-                    }
-                }
+                // Only load other tabs if selected and empty
                 if selectedFilter == .following && viewModel.followingLists.isEmpty {
                     Task {
                         await viewModel.loadFollowingLists()
                     }
                 }
+                if selectedFilter == .popular && viewModel.popularLists.isEmpty {
+                    Task {
+                        await viewModel.loadPopularLists()
+                    }
+                }
             }
             .onChange(of: selectedFilter) { _, newValue in
+                print("🔄 [ListsView] Tab changed to: \(newValue)")
                 if newValue == .following && viewModel.followingLists.isEmpty {
+                    print("📋 [ListsView] Loading following lists (empty)")
                     Task {
                         await viewModel.loadFollowingLists()
                     }
+                }
+                if newValue == .popular && viewModel.popularLists.isEmpty {
+                    print("🔥 [ListsView] Loading popular lists (empty)")
+                    Task {
+                        await viewModel.loadPopularLists()
+                    }
+                } else if newValue == .popular {
+                    print("🔥 [ListsView] Popular tab selected but already has \(viewModel.popularLists.count) items")
                 }
             }
             .alert("Error", isPresented: .constant(viewModel.errorMessage != nil)) {
@@ -389,15 +441,20 @@ struct FilterTab: View {
     
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 8) {
+            VStack(spacing: 0) {
                 Image(systemName: icon)
                     .font(.system(size: 20, weight: .semibold))
                     .foregroundColor(isSelected ? Color(red: 1.0, green: 0.4, blue: 0.4) : .secondary)
+                    .frame(height: 24)
+                
+                Spacer()
+                    .frame(height: 8)
                 
                 Rectangle()
                     .fill(isSelected ? Color(red: 1.0, green: 0.4, blue: 0.4) : Color.clear)
                     .frame(height: 2)
             }
+            .frame(height: 34)
         }
         .frame(maxWidth: .infinity)
     }
@@ -435,88 +492,123 @@ struct ListGridItem: View {
     let showLikes: Bool
     
     var body: some View {
-        ZStack(alignment: .topTrailing) {
-            // Background/Placeholder
-            if list.coverPhotoUrl == nil {
-                // Elegant placeholder design
-                ZStack {
-                    LinearGradient(
-                        colors: [
-                            Color(red: 1.0, green: 0.4, blue: 0.4).opacity(0.2),
-                            Color(red: 1.0, green: 0.5, blue: 0.5).opacity(0.1)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                    
-                    VStack(spacing: 8) {
-                        Image(systemName: "list.bullet.rectangle.portrait")
-                            .font(.system(size: 32))
-                            .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4).opacity(0.5))
+        GeometryReader { geometry in
+            ZStack(alignment: .topTrailing) {
+                // Background/Placeholder
+                if list.coverPhotoUrl == nil {
+                    // Elegant placeholder design
+                    ZStack {
+                        LinearGradient(
+                            colors: [
+                                Color(red: 1.0, green: 0.4, blue: 0.4).opacity(0.2),
+                                Color(red: 1.0, green: 0.5, blue: 0.5).opacity(0.1)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                        
+                        VStack(spacing: 8) {
+                            Image(systemName: "list.bullet.rectangle.portrait")
+                                .font(.system(size: 32))
+                                .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4).opacity(0.5))
+                        }
+                    }
+                } else {
+                    AsyncImage(url: URL(string: list.coverPhotoUrl!)) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(width: geometry.size.width, height: geometry.size.height)
+                                .clipped()
+                                .transition(.opacity.animation(.easeInOut(duration: 0.3)))
+                        case .failure(_):
+                            placeholderWithError
+                        case .empty:
+                            placeholderWithLoading
+                        @unknown default:
+                            placeholderWithLoading
+                        }
                     }
                 }
-            } else {
-                AsyncImage(url: URL(string: list.coverPhotoUrl!)) { image in
-                    image.resizable().scaledToFill()
-                } placeholder: {
-                    Color.gray.opacity(0.2)
-                }
-            }
-            
-            // Like count (top right)
-            if showLikes {
-                HStack(spacing: 3) {
-                    Image(systemName: "heart.fill")
-                        .font(.system(size: 9, weight: .semibold))
-                    Text("\(list.likesCount ?? 0)")
-                        .font(.system(size: 11, weight: .bold))
-                }
-                .foregroundColor(.white)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 4)
-                .background(
-                    Color.black.opacity(0.75)
-                )
-                .clipShape(Capsule())
-                .overlay(
-                    Capsule()
-                        .strokeBorder(Color.white.opacity(0.3), lineWidth: 0.5)
-                )
-                .shadow(color: .black.opacity(0.3), radius: 2, x: 0, y: 1)
-                .padding(6)
-            }
-            
-            // Title overlay (bottom)
-            VStack(alignment: .leading, spacing: 4) {
-                Spacer()
                 
-                Text(list.title)
-                    .font(.system(size: 13, weight: .semibold))
+                // Like count (top right)
+                if showLikes {
+                    HStack(spacing: 3) {
+                        Image(systemName: "heart.fill")
+                            .font(.system(size: 9, weight: .semibold))
+                        Text("\(list.likesCount ?? 0)")
+                            .font(.system(size: 11, weight: .bold))
+                    }
                     .foregroundColor(.white)
-                    .lineLimit(2)  // ✅ 2 lines
-                    .multilineTextAlignment(.leading)
-                
-                // Restaurant count
-                HStack(spacing: 3) {
-                    Image(systemName: "mappin.circle.fill")
-                        .font(.system(size: 11))
-                    Text("\(list.itemCount ?? 0)")
-                        .font(.system(size: 11))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 4)
+                    .background(
+                        Color.black.opacity(0.75)
+                    )
+                    .clipShape(Capsule())
+                    .overlay(
+                        Capsule()
+                            .strokeBorder(Color.white.opacity(0.3), lineWidth: 0.5)
+                    )
+                    .shadow(color: .black.opacity(0.3), radius: 2, x: 0, y: 1)
+                    .padding(6)
                 }
-                .foregroundColor(.white.opacity(0.9))
-            }
-            .padding(8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                LinearGradient(
-                    colors: [.clear, .black.opacity(0.7)],
-                    startPoint: .top,
-                    endPoint: .bottom
+                
+                // Title overlay (bottom)
+                VStack(alignment: .leading, spacing: 4) {
+                    Spacer()
+                    
+                    Text(list.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.white)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                    
+                    // Restaurant count
+                    HStack(spacing: 3) {
+                        Image(systemName: "mappin.circle.fill")
+                            .font(.system(size: 11))
+                        Text("\(list.itemCount ?? 0)")
+                            .font(.system(size: 11))
+                    }
+                    .foregroundColor(.white.opacity(0.9))
+                }
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    LinearGradient(
+                        colors: [.clear, .black.opacity(0.7)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
                 )
-            )
+            }
         }
-        .aspectRatio(1, contentMode: .fill)
+        .aspectRatio(1, contentMode: .fit)
+        .clipped()
         .clipShape(Rectangle())
+    }
+    
+    private var placeholderWithLoading: some View {
+        ZStack {
+            Color.gray.opacity(0.15)
+            
+            ProgressView()
+                .tint(Color(red: 1.0, green: 0.4, blue: 0.4).opacity(0.6))
+                .scaleEffect(0.8)
+        }
+    }
+    
+    private var placeholderWithError: some View {
+        ZStack {
+            Color.gray.opacity(0.2)
+            
+            Image(systemName: "photo")
+                .font(.system(size: 24))
+                .foregroundColor(.gray.opacity(0.5))
+        }
     }
 }
 
@@ -582,14 +674,14 @@ struct FollowingListGridItem: View {
                 Text(item.title)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(.white)
-                    .lineLimit(2)  // ✅ 2 lines
+                    .lineLimit(2)
                     .multilineTextAlignment(.leading)
                 
                 // Restaurant count
                 HStack(spacing: 3) {
                     Image(systemName: "mappin.circle.fill")
                         .font(.system(size: 11))
-                    Text("\(item.itemCount)")
+                    Text("\(item.itemCount ?? 0)")
                         .font(.system(size: 11))
                 }
                 .foregroundColor(.white.opacity(0.9))
@@ -606,6 +698,90 @@ struct FollowingListGridItem: View {
         }
         .aspectRatio(1, contentMode: .fill)
         .clipShape(Rectangle())
+    }
+}
+
+// MARK: - Popular List Grid Item
+
+struct PopularListGridItem: View {
+    let item: PopularList
+    let onTap: () -> Void
+    
+    var body: some View {
+        Button(action: onTap) {
+            ZStack(alignment: .topTrailing) {
+                // Placeholder design (no cover photos in lists table)
+                ZStack {
+                    LinearGradient(
+                        colors: [
+                            Color(red: 1.0, green: 0.4, blue: 0.4).opacity(0.2),
+                            Color(red: 1.0, green: 0.5, blue: 0.5).opacity(0.1)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    
+                    VStack(spacing: 8) {
+                        Image(systemName: "flame.fill")
+                            .font(.system(size: 32))
+                            .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4).opacity(0.5))
+                    }
+                }
+                
+                // Like count (top right)
+                HStack(spacing: 3) {
+                    Image(systemName: "heart.fill")
+                        .font(.system(size: 9, weight: .semibold))
+                    Text("\(item.likesCount)")
+                        .font(.system(size: 11, weight: .bold))
+                }
+                .foregroundColor(.white)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 4)
+                .background(
+                    Color.black.opacity(0.75)
+                )
+                .clipShape(Capsule())
+                .overlay(
+                    Capsule()
+                        .strokeBorder(Color.white.opacity(0.3), lineWidth: 0.5)
+                )
+                .shadow(color: .black.opacity(0.3), radius: 2, x: 0, y: 1)
+                .padding(6)
+                
+                // Title overlay (bottom)
+                VStack(alignment: .leading, spacing: 4) {
+                    Spacer()
+                    
+                    Text(item.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.white)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                    
+                    // Restaurant count
+                    HStack(spacing: 3) {
+                        Image(systemName: "mappin.circle.fill")
+                            .font(.system(size: 11))
+                        Text("\(item.itemCount)")
+                            .font(.system(size: 11))
+                    }
+                    .foregroundColor(.white.opacity(0.9))
+                }
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    LinearGradient(
+                        colors: [.clear, .black.opacity(0.7)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+            }
+            .aspectRatio(1, contentMode: .fill)
+            .clipShape(Rectangle())
+        }
+        .buttonStyle(PlainButtonStyle())
     }
 }
 

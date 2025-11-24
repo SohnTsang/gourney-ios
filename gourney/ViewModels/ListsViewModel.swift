@@ -45,6 +45,7 @@ class ListsViewModel: ObservableObject {
     @Published var defaultLists: [RestaurantList] = []
     @Published var customLists: [RestaurantList] = []
     @Published var followingLists: [FollowingListItem] = []
+    @Published var popularLists: [PopularList] = []
     @Published var isLoading = false
     @Published var isLoadingMore = false
     @Published var errorMessage: String?
@@ -63,6 +64,7 @@ class ListsViewModel: ObservableObject {
         defaultLists.removeAll(keepingCapacity: false)
         customLists.removeAll(keepingCapacity: false)
         followingLists.removeAll(keepingCapacity: false)
+        popularLists.removeAll(keepingCapacity: false)
         myListsPage = 0
         followingPage = 0
         hasMoreMyLists = true
@@ -227,8 +229,11 @@ class ListsViewModel: ObservableObject {
     
     func deleteList(listId: String) async -> Bool {
         do {
+            // Build URL with query parameter
+            let path = "/functions/v1/lists-delete?list_id=\(listId)"
+            
             let _: EmptyResponse = try await client.delete(
-                path: "/functions/v1/lists-delete/\(listId)",
+                path: path,
                 requiresAuth: true
             )
             
@@ -250,13 +255,13 @@ class ListsViewModel: ObservableObject {
                 "visibility": visibility
             ]
             
-            let response: CreateListResponse = try await client.post(
+            // Edge function returns list directly, not wrapped in {list: ...}
+            let newList: RestaurantList = try await client.post(
                 path: "/functions/v1/lists-create",
                 body: body,
                 requiresAuth: true
             )
             
-            let newList = response.list
             customLists.insert(newList, at: 0)
             
             print("✅ [Lists] Created: \(newList.title)")
@@ -265,6 +270,171 @@ class ListsViewModel: ObservableObject {
             errorMessage = error.localizedDescription
             print("❌ [Lists] Create error: \(error)")
             return false
+        }
+    }
+    
+    func updateListCoverPhoto(listId: String, photoUrl: String) async -> Bool {
+        do {
+            // Build URL with query parameter
+            let path = "/functions/v1/lists-update?list_id=\(listId)"
+            
+            let body: [String: Any] = [
+                "cover_photo_url": photoUrl
+            ]
+            
+            let updatedList: RestaurantList = try await client.patch(
+                path: path,
+                body: body,
+                requiresAuth: true
+            )
+            
+            // Update in memory
+            if let index = defaultLists.firstIndex(where: { $0.id == listId }) {
+                defaultLists[index] = updatedList
+            }
+            if let index = customLists.firstIndex(where: { $0.id == listId }) {
+                customLists[index] = updatedList
+            }
+            
+            print("✅ [Lists] Updated cover photo: \(listId)")
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            print("❌ [Lists] Update cover photo error: \(error)")
+            return false
+        }
+    }
+}
+
+extension ListsViewModel {
+    @MainActor
+    func loadPopularLists(loadMore: Bool = false) async {
+        print("🔍 [Popular] loadPopularLists called - loadMore: \(loadMore)")
+        print("🔍 [Popular] Current state - count: \(popularLists.count), isLoading: \(isLoading), isLoadingMore: \(isLoadingMore)")
+        
+        // Skip if already loaded (not loading more)
+        if !loadMore && !popularLists.isEmpty {
+            print("⏭️ [Popular] Already loaded (\(popularLists.count) items), skipping")
+            return
+        }
+        
+        // Skip if already in progress
+        if loadMore && isLoadingMore {
+            print("⏭️ [Popular] Already loading more, skipping")
+            return
+        }
+        if !loadMore && isLoading {
+            print("⏭️ [Popular] Already loading, skipping")
+            return
+        }
+        
+        // Set loading flags
+        if loadMore {
+            print("🔄 [Popular] Setting isLoadingMore = true")
+            isLoadingMore = true
+        } else {
+            print("🔄 [Popular] Setting isLoading = true")
+            isLoading = true
+        }
+        
+        do {
+            let body: [String: Any] = ["limit": 20]
+            let response: PopularListsResponse = try await client.post(
+                path: "/functions/v1/lists-get-popular",
+                body: body,
+                requiresAuth: true
+            )
+            
+            if loadMore {
+                // Filter out duplicates before appending
+                let newLists = response.lists.filter { newList in
+                    !popularLists.contains(where: { $0.id == newList.id })
+                }
+                popularLists.append(contentsOf: newLists)
+            } else {
+                popularLists = response.lists
+            }
+            
+            print("✅ [Popular] Loaded \(response.lists.count) popular lists")
+        } catch {
+            print("❌ [Popular] Error loading: \(error)")
+            errorMessage = error.localizedDescription
+        }
+        
+        print("🔄 [Popular] Setting isLoading = false, isLoadingMore = false")
+        isLoading = false
+        isLoadingMore = false
+    }
+    
+    @MainActor
+    func incrementListView(listId: String) async {
+        do {
+            let body = ["list_id": listId]
+            let _: EmptyResponse = try await client.post(
+                path: "/functions/v1/lists-increment-view",
+                body: body,
+                requiresAuth: true
+            )
+            print("✅ [View] Incremented view count for list: \(listId)")
+        } catch {
+            print("⚠️ [View] Failed to increment: \(error.localizedDescription)")
+            // Silent fail - don't show error to user
+        }
+    }
+    
+    @MainActor
+    func updateListItemCount(listId: String, newCount: Int) {
+        print("🔄 [Lists] Updating itemCount for list \(listId): → \(newCount)")
+        
+        // Update in defaultLists
+        if let index = defaultLists.firstIndex(where: { $0.id == listId }) {
+            var updatedList = defaultLists[index]
+            updatedList.itemCount = newCount
+            defaultLists[index] = updatedList
+            print("✅ [Lists] Updated defaultList[\(index)].itemCount = \(newCount)")
+        }
+        
+        // Update in customLists
+        if let index = customLists.firstIndex(where: { $0.id == listId }) {
+            var updatedList = customLists[index]
+            updatedList.itemCount = newCount
+            customLists[index] = updatedList
+            print("✅ [Lists] Updated customList[\(index)].itemCount = \(newCount)")
+        }
+    }
+    
+    @MainActor
+    func refreshSingleList(listId: String) async {
+        do {
+            let body: [String: Any] = ["list_id": listId]
+            let response: ListDetailResponse = try await client.post(
+                path: "/functions/v1/lists-get-detail",
+                body: body,
+                requiresAuth: true
+            )
+            
+            let updatedList = RestaurantList(
+                id: response.list.id,
+                title: response.list.title,
+                description: response.list.description,
+                visibility: response.list.visibility,
+                itemCount: response.list.itemCount,
+                coverPhotoUrl: response.list.coverPhotoUrl,
+                createdAt: response.list.createdAt,
+                likesCount: response.list.likesCount
+            )
+            
+            if let index = defaultLists.firstIndex(where: { $0.id == listId }) {
+                defaultLists[index] = updatedList
+                print("✅ [Lists] Refreshed defaultList[\(index)] - cover: \(updatedList.coverPhotoUrl ?? "nil")")
+            }
+            
+            if let index = customLists.firstIndex(where: { $0.id == listId }) {
+                customLists[index] = updatedList
+                print("✅ [Lists] Refreshed customList[\(index)] - cover: \(updatedList.coverPhotoUrl ?? "nil")")
+            }
+        } catch {
+            print("❌ [Lists] Refresh single list error: \(error)")
         }
     }
 }

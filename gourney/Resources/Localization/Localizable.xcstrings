@@ -7,6 +7,9 @@
     "·" : {
 
     },
+    "(You)" : {
+
+    },
     "@" : {
 
     },
@@ -28,6 +31,9 @@
           }
         }
       }
+    },
+    "%lld pts" : {
+
     },
     "%lld visit%@" : {
       "localizations" : {
@@ -89,9 +95,6 @@
 
     },
     "Already taken" : {
-
-    },
-    "Are you sure you want to delete \"%@\"? This action cannot be undone." : {
 
     },
     "auth.city.label" : {
@@ -847,9 +850,6 @@
     "Back to Sign Up" : {
 
     },
-    "Be the first to earn points!" : {
-
-    },
     "Be the first to visit!" : {
 
     },
@@ -1177,9 +1177,6 @@
 
     },
     "Delete" : {
-
-    },
-    "Delete List" : {
 
     },
     "Description" : {
@@ -1602,6 +1599,9 @@
 
     },
     "Lists" : {
+
+    },
+    "Lists with 3+ likes and 3+ places will appear here" : {
 
     },
     "lists.add_place.title" : {
@@ -2067,9 +2067,6 @@
     "Loading place info..." : {
 
     },
-    "Loading rankings..." : {
-
-    },
     "Loading visits..." : {
 
     },
@@ -2197,6 +2194,9 @@
 
     },
     "No Places Yet" : {
+
+    },
+    "No Popular Lists Yet" : {
 
     },
     "No rankings yet" : {
@@ -2673,6 +2673,30 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "總排名"
+          }
+        }
+      }
+    },
+    "rank.timeframe.monthly" : {
+      "comment" : "This Month",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This Month"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今月"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本月"
           }
         }
       }

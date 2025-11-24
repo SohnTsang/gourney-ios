@@ -62,9 +62,19 @@ class SupabaseClient {
     
     
     private func buildURL(path: String, queryItems: [URLQueryItem]? = nil) -> URL {
-        var components = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: true)!
-        components.queryItems = queryItems
-        return components.url!
+        // Check if path already contains query parameters
+        if path.contains("?") {
+            // Path already has query string - append directly to baseURL
+            guard let url = URL(string: path, relativeTo: baseURL)?.absoluteURL else {
+                fatalError("Invalid path: \(path)")
+            }
+            return url
+        } else {
+            // Normal path without query string - use URLComponents
+            var components = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: true)!
+            components.queryItems = queryItems
+            return components.url!
+        }
     }
     
     // MARK: - Request Building
@@ -158,6 +168,13 @@ class SupabaseClient {
         
         // Handle errors
         switch httpResponse.statusCode {
+        case 204:
+            // No Content - return empty response for EmptyResponse type
+            if T.self == EmptyResponse.self {
+                return EmptyResponse() as! T
+            }
+            // For other types expecting 204, also return empty
+            break
         case 200...299:
             break
         case 401:

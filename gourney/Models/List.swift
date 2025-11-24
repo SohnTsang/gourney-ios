@@ -8,10 +8,11 @@ struct RestaurantList: Codable, Identifiable {
     let title: String
     let description: String?
     let visibility: String
-    let itemCount: Int?
+    var itemCount: Int?  // Changed to var for local updates
     let coverPhotoUrl: String?
     let createdAt: String
     var likesCount: Int?
+    var viewCount: Int?
     
     // Computed property if you need Date
     var createdDate: Date? {
@@ -131,7 +132,9 @@ struct ListWithLikeStatus: Codable {
     let createdAt: String
     let itemCount: Int
     let likesCount: Int
+    let viewCount: Int?
     let hasLiked: Bool
+    let coverPhotoUrl: String?
 }
 
 struct ListDetailResponse: Codable {
@@ -150,4 +153,26 @@ struct ListLike: Codable {
 struct ListLikeResponse: Codable {
     let liked: Bool
     let likeCount: Int
+}
+
+// MARK: - Popular Lists
+struct PopularList: Codable, Identifiable {
+    let id: String
+    let title: String
+    let description: String?
+    let visibility: String
+    let itemCount: Int
+    let likesCount: Int
+    let viewCount: Int
+    let ownerHandle: String?
+    let ownerDisplayName: String?
+    let ownerAvatarUrl: String?
+    let createdAt: String
+    let popularityScore: Double
+    
+    // Note: coverPhotoUrl removed - lists table doesn't have this column
+}
+
+struct PopularListsResponse: Codable {
+    let lists: [PopularList]
 }

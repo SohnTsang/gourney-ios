@@ -7,7 +7,7 @@ import Combine
 
 struct ListDetailView: View {
     @State var list: RestaurantList
-    let onListUpdated: (() -> Void)?
+    let onListUpdated: ((String, Int) -> Void)?  // (listId, newCount)
     let isReadOnly: Bool
     let ownerHandle: String?  // Add owner handle for display
     
@@ -27,6 +27,8 @@ struct ListDetailView: View {
     @State private var showAddVisitFromDetail = false
     @State private var refreshTrigger = UUID()
     @State private var dragOffset: CGFloat = 0
+    @State private var selectedCoverPhoto: PhotosPickerItem?
+    @State private var isUploadingCover = false
     @Environment(\.colorScheme) private var colorScheme
     
     // Check if this is a default list
@@ -36,7 +38,7 @@ struct ListDetailView: View {
         return list.title == wantToTryTitle || list.title == favoritesTitle
     }
     
-    init(list: RestaurantList, isReadOnly: Bool = false, ownerHandle: String? = nil, onListUpdated: (() -> Void)? = nil) {
+    init(list: RestaurantList, isReadOnly: Bool = false, ownerHandle: String? = nil, onListUpdated: ((String, Int) -> Void)? = nil) {
         self._list = State(initialValue: list)
         self.isReadOnly = isReadOnly
         self.ownerHandle = ownerHandle
@@ -108,7 +110,15 @@ struct ListDetailView: View {
                                 coverUrl: list.coverPhotoUrl,
                                 isReadOnly: isReadOnly,
                                 onUpload: { image in
-                                    await viewModel.uploadCover(listId: list.id, image: image)
+                                    // Upload and get new URL
+                                    if let newUrl = await viewModel.uploadCover(listId: list.id, image: image) {
+                                        // Trigger parent to refresh this list
+                                        // Parent will reload and get updated cover from API
+                                        onListUpdated?(list.id, list.itemCount ?? 0)
+                                        
+                                        return newUrl
+                                    }
+                                    return nil
                                 }
                             )
                             
@@ -184,21 +194,50 @@ struct ListDetailView: View {
                             } else {
                                 LazyVStack(spacing: 0) {
                                     ForEach(viewModel.places) { item in
-                                        PlaceRowView(
-                                            item: PlaceRowItem(from: item),
-                                            distance: item.place.map { locationManager.formattedDistance(from: $0.coordinate) } ?? nil,
-                                            showRemoveButton: !isReadOnly,
-                                            onRemove: {
-                                                Task {
-                                                    await viewModel.removePlace(listId: list.id, itemId: item.id)
+                                        if !isReadOnly {
+                                            SwipeToDeleteRow(
+                                                item: item,
+                                                distance: item.place.map { locationManager.formattedDistance(from: $0.coordinate) } ?? nil,
+                                                onTap: {
+                                                    if let place = item.place {
+                                                        selectedPlace = place
+                                                        showPlaceDetail = true
+                                                    }
+                                                },
+                                                onDelete: {
+                                                    guard let placeId = item.place?.id else { return }
+                                                    
+                                                    Task {
+                                                        await viewModel.removePlace(
+                                                            listId: list.id,
+                                                            itemId: item.id,
+                                                            placeId: placeId,
+                                                            onSuccess: { newCount in
+                                                                print("🔄 [ListDetail] Received newCount: \(newCount)")
+                                                                list.itemCount = newCount
+                                                                onListUpdated?(list.id, newCount)
+                                                            }
+                                                        )
+                                                    }
                                                 }
-                                            }
-                                        )
-                                        .contentShape(Rectangle())
-                                        .onTapGesture {
-                                            if let place = item.place {
-                                                selectedPlace = place
-                                                showPlaceDetail = true
+                                            )
+                                            .transition(.asymmetric(
+                                                insertion: .opacity,
+                                                removal: .move(edge: .leading).combined(with: .opacity)
+                                            ))
+                                        } else {
+                                            PlaceRowView(
+                                                item: PlaceRowItem(from: item),
+                                                distance: item.place.map { locationManager.formattedDistance(from: $0.coordinate) } ?? nil,
+                                                showRemoveButton: false,
+                                                onRemove: nil
+                                            )
+                                            .contentShape(Rectangle())
+                                            .onTapGesture {
+                                                if let place = item.place {
+                                                    selectedPlace = place
+                                                    showPlaceDetail = true
+                                                }
                                             }
                                         }
                                         
@@ -209,6 +248,7 @@ struct ListDetailView: View {
                                     }
                                 }
                                 .background(colorScheme == .dark ? Color(.systemBackground) : Color.white)
+                                .animation(.spring(response: 0.35, dampingFraction: 0.75), value: viewModel.places.count)
                             }
                         }
                     }
@@ -277,7 +317,7 @@ struct ListDetailView: View {
                         isPresented: $showSettings,
                         onSave: { updatedList in
                             list = updatedList
-                            onListUpdated?()
+                            onListUpdated?(list.id, list.itemCount ?? 0)
                         }
                     )
                 }
@@ -316,15 +356,15 @@ struct ListDetailView: View {
                     )
                 }
             }
-            .alert("Delete List", isPresented: $showDeleteAlert) {
-                Button("Cancel", role: .cancel) {}
-                Button("Delete", role: .destructive) {
-                    Task {
-                        await deleteList()
-                    }
+            .customDeleteAlert(
+                isPresented: $showDeleteAlert,
+                title: "Delete List",
+                message: "This action cannot be undone.",
+                confirmTitle: "Delete"
+            ) {
+                Task {
+                    await deleteList()
                 }
-            } message: {
-                Text("Are you sure you want to delete \"\(list.title)\"? This action cannot be undone.")
             }
             .interactiveDismissDisabled(showSettings || showDeleteAlert || isDeleting)
         }
@@ -355,18 +395,24 @@ struct ListDetailView: View {
         isDeleting = true
         
         do {
+            // Optimistic UI - dismiss immediately for smooth UX
+            await MainActor.run {
+                dismiss()
+            }
+            
+            // Background delete - build URL with query parameter
+            let path = "/functions/v1/lists-delete?list_id=\(list.id)"
             let _: EmptyResponse = try await SupabaseClient.shared.delete(
-                path: "/functions/v1/lists-delete/\(list.id)",
+                path: path,
                 requiresAuth: true
             )
             
             print("✅ [ListDetail] List deleted: \(list.title)")
             
-            // Navigate back after successful delete
+            // Update parent view
             await MainActor.run {
+                onListUpdated?(list.id, 0)
                 isDeleting = false
-                onListUpdated?()
-                dismiss()
             }
         } catch {
             print("❌ [ListDetail] Delete error: \(error)")
@@ -418,7 +464,7 @@ struct ListDetailView: View {
                 list.likesCount = response.likeCount
                 
                 // Notify parent view to refresh if needed
-                onListUpdated?()
+                onListUpdated?(list.id, list.itemCount ?? 0)
             }
             
             print("✅ [List] Like toggled: \(response.liked ? "Liked" : "Unliked")")
@@ -448,46 +494,70 @@ struct ListDetailView: View {
 struct CoverImageView: View {
     let coverUrl: String?
     let isReadOnly: Bool
-    let onUpload: (UIImage) async -> Void
+    let onUpload: (UIImage) async -> String?  // Returns new URL
     
     @State private var selectedItem: PhotosPickerItem?
     @State private var isUploading = false
+    @State private var currentCoverUrl: String?
     
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
-            if let coverUrl = coverUrl {
-                AsyncImage(url: URL(string: coverUrl)) { image in
-                    image.resizable().scaledToFill()
-                } placeholder: {
+        ZStack {
+            // Cover photo or placeholder
+            ZStack(alignment: .bottomTrailing) {
+                if let url = currentCoverUrl ?? coverUrl {
+                    AsyncImage(url: URL(string: url)) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .scaledToFill()
+                        case .failure(_):
+                            placeholderView
+                        case .empty:
+                            placeholderView
+                        @unknown default:
+                            placeholderView
+                        }
+                    }
+                } else {
                     placeholderView
                 }
-            } else {
-                placeholderView
+                
+                if !isReadOnly {
+                    PhotosPicker(selection: $selectedItem, matching: .images) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "camera.fill")
+                            Text(currentCoverUrl == nil && coverUrl == nil ? "Add" : "Change")
+                                .fontWeight(.medium)
+                        }
+                        .font(.system(size: 14))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 7)
+                        .background(
+                            LinearGradient(
+                                colors: [Color(red: 1.0, green: 0.4, blue: 0.4), Color(red: 0.95, green: 0.3, blue: 0.35)],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .clipShape(Capsule())
+                        .shadow(color: .black.opacity(0.2), radius: 4, y: 2)
+                        .padding(16)
+                    }
+                    .disabled(isUploading)
+                    .opacity(isUploading ? 0 : 1)
+                }
             }
             
-            if !isReadOnly {
-                PhotosPicker(selection: $selectedItem, matching: .images) {
-                    HStack(spacing: 6) {
-                        Image(systemName: isUploading ? "arrow.triangle.2.circlepath" : "camera.fill")
-                        Text(coverUrl == nil ? "Add" : "Change")
-                            .fontWeight(.medium)
-                    }
-                    .font(.system(size: 14))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 7)
-                    .background(
-                        LinearGradient(
-                            colors: [Color(red: 1.0, green: 0.4, blue: 0.4), Color(red: 0.95, green: 0.3, blue: 0.35)],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
-                    .clipShape(Capsule())
-                    .shadow(color: .black.opacity(0.2), radius: 4, y: 2)
-                    .padding(16)
-                }
-                .disabled(isUploading)
+            // Loading overlay
+            if isUploading {
+                Color.black.opacity(0.4)
+                    .ignoresSafeArea()
+                
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    .scaleEffect(1.5)
             }
         }
         .frame(height: 200)
@@ -497,10 +567,25 @@ struct CoverImageView: View {
                 if let data = try? await newItem?.loadTransferable(type: Data.self),
                    let image = UIImage(data: data) {
                     isUploading = true
-                    await onUpload(image)
+                    
+                    if let newUrl = await onUpload(image) {
+                        await MainActor.run {
+                            withAnimation(.easeInOut(duration: 0.3)) {
+                                currentCoverUrl = newUrl
+                            }
+                        }
+                    }
+                    
                     isUploading = false
+                    selectedItem = nil
                 }
             }
+        }
+        .onAppear {
+            currentCoverUrl = coverUrl
+        }
+        .onChange(of: coverUrl) { _, newUrl in
+            currentCoverUrl = newUrl
         }
     }
     
@@ -650,45 +735,107 @@ class ListDetailViewModel: ObservableObject {
         } onCancel: { }
     }
     
-    func removePlace(listId: String, itemId: String) async {
+    func removePlace(listId: String, itemId: String, placeId: String, onSuccess: @escaping (Int) -> Void) async {
+        print("🗑️ [RemovePlace] Starting delete - listId: \(listId), itemId: \(itemId), placeId: \(placeId)")
+        
+        // Store original state for rollback if needed
+        let originalPlaces = places
+        
+        // OPTIMISTIC UPDATE: Remove from UI immediately
+        await MainActor.run {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
+                places.removeAll { $0.id == itemId }
+            }
+        }
+        
+        let newCount = places.count
+        print("⚡ [RemovePlace] Optimistic removal, new count: \(newCount)")
+        
+        // Trigger parent refresh with NEW count
+        await MainActor.run {
+            onSuccess(newCount)
+        }
+        
+        // Background API call
         do {
-            let _: EmptyResponse = try await client.delete(
-                path: "/functions/v1/lists-remove-item?list_id=\(listId)&item_id=\(itemId)",
-                requiresAuth: true
-            )
+            var components = URLComponents(url: URL(string: Config.supabaseURL)!.appendingPathComponent("/functions/v1/lists-remove-item"), resolvingAgainstBaseURL: true)!
+            components.queryItems = [
+                URLQueryItem(name: "list_id", value: listId),
+                URLQueryItem(name: "place_id", value: placeId)
+            ]
             
-            places.removeAll { $0.id == itemId }
+            guard let url = components.url else {
+                throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid URL"])
+            }
+            
+            var request = URLRequest(url: url)
+            request.httpMethod = "DELETE"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue(Config.supabaseAnonKey, forHTTPHeaderField: "apikey")
+            request.setValue(Config.apiVersion, forHTTPHeaderField: "X-API-Version")
+            
+            if let token = client.getAuthToken() {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+            
+            let (_, response) = try await URLSession.shared.data(for: request)
+            
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])
+            }
+            
+            if httpResponse.statusCode == 204 {
+                print("✅ [RemovePlace] API confirmed delete")
+            } else if httpResponse.statusCode >= 400 {
+                throw NSError(domain: "", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Delete failed"])
+            }
         } catch {
-            errorMessage = error.localizedDescription
+            print("❌ [RemovePlace] API failed, rolling back: \(error)")
+            
+            // ROLLBACK: Restore original list
+            await MainActor.run {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
+                    places = originalPlaces
+                }
+                errorMessage = "Failed to remove item. Please try again."
+                // Trigger parent refresh to restore count
+                onSuccess(originalPlaces.count)
+            }
         }
     }
     
-    func uploadCover(listId: String, image: UIImage) async {
-        guard let imageData = image.jpegData(compressionQuality: 0.7) else { return }
-        
+    func uploadCover(listId: String, image: UIImage) async -> String? {
         do {
-            isLoading = true
+            // Get user ID
+            guard let userId = client.getCurrentUserId() else {
+                throw CoverPhotoError.notAuthenticated
+            }
             
-            // Upload to storage (implement storage upload logic)
-            // For now, placeholder
-            let coverUrl = "uploaded_url"
+            // Upload photo (optimized, memory-efficient)
+            let coverUrl = try await ListCoverPhotoUploader.shared.uploadCoverPhoto(
+                image,
+                userId: userId,
+                listId: listId
+            )
             
-            // Update list
-            let body: [String: Any] = [
-                "list_id": listId,
-                "cover_photo_url": coverUrl
-            ]
+            // Update list via edge function
+            let path = "/functions/v1/lists-update?list_id=\(listId)"
+            let body: [String: Any] = ["cover_photo_url": coverUrl]
             
-            let _: EmptyResponse = try await client.post(
-                path: "/functions/v1/lists-update",
+            let _: RestaurantList = try await client.patch(
+                path: path,
                 body: body,
                 requiresAuth: true
             )
             
-            isLoading = false
+            print("✅ [ListDetail] Cover photo updated")
+            return coverUrl
         } catch {
-            errorMessage = error.localizedDescription
-            isLoading = false
+            await MainActor.run {
+                errorMessage = error.localizedDescription
+            }
+            print("❌ [ListDetail] Cover upload error: \(error)")
+            return nil
         }
     }
 }
@@ -725,5 +872,88 @@ struct AddPlaceToListSheet: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - Swipe to Delete Row
+
+struct SwipeToDeleteRow: View {
+    let item: ListItem
+    let distance: String?
+    let onTap: () -> Void
+    let onDelete: () -> Void
+    
+    @State private var offset: CGFloat = 0
+    @Environment(\.colorScheme) private var colorScheme
+    
+    private let deleteButtonWidth: CGFloat = 80
+    private let deleteThreshold: CGFloat = 60
+    
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            // Delete button background - always visible behind
+            Button(action: {
+                print("🗑️ [Delete] Button tapped")
+                onDelete()
+            }) {
+                VStack(spacing: 4) {
+                    Image(systemName: "trash.fill")
+                        .font(.system(size: 20, weight: .medium))
+                    Text("Delete")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .foregroundColor(.white)
+                .frame(width: deleteButtonWidth)
+                .frame(maxHeight: .infinity)
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .background(Color.red)
+            
+            // Main content - slides over delete button
+            PlaceRowView(
+                item: PlaceRowItem(from: item),
+                distance: distance,
+                showRemoveButton: false,
+                onRemove: nil
+            )
+            .background(colorScheme == .dark ? Color(.systemBackground) : Color.white)
+            .offset(x: offset)
+            .gesture(
+                DragGesture()
+                    .onChanged { value in
+                        let translation = value.translation.width
+                        if translation < 0 {
+                            offset = max(translation, -deleteButtonWidth)
+                        } else if offset < 0 {
+                            offset = min(0, offset + translation)
+                        }
+                    }
+                    .onEnded { value in
+                        withAnimation(.spring(response: 0.3)) {
+                            if offset < -deleteThreshold {
+                                offset = -deleteButtonWidth
+                            } else {
+                                offset = 0
+                            }
+                        }
+                    }
+            )
+            .simultaneousGesture(
+                TapGesture()
+                    .onEnded { _ in
+                        if offset < 0 {
+                            // Close swipe if open
+                            withAnimation(.spring(response: 0.3)) {
+                                offset = 0
+                            }
+                        } else {
+                            // Normal tap
+                            onTap()
+                        }
+                    }
+            )
+        }
+        .frame(height: 90)
+        .clipped()
     }
 }
