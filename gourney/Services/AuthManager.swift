@@ -24,14 +24,16 @@ class AuthManager: ObservableObject {
     @Published var emailConfirmationRequired = false
     
     private let refreshTokenKey = "refresh_token"
-    private var isRefreshing = false
+    // ✅ Proper refresh lock with continuation support
+    private var refreshTask: Task<Bool, Never>?
+    private let refreshLock = NSLock()
 
     
     private init() {
         // Allow HTTP client to refresh once on 401 and retry
         SupabaseClient.shared.authRefreshHandler = { [weak self] in
             guard let self = self else { return false }
-            return await self.refreshSession()
+            return await self.refreshSessionWithLock()
         }
 
         Task { await checkAuthStatus() }
@@ -894,40 +896,60 @@ class AuthManager: ObservableObject {
         UserDefaults.standard.string(forKey: refreshTokenKey)
     }
     
-    /// Attempts to refresh the session. Returns true on success.
-    func refreshSession() async -> Bool {
-        if isRefreshing { return false }
-        isRefreshing = true
-        defer { isRefreshing = false }
-
+    // ✅ Thread-safe refresh that makes concurrent callers wait (Swift 6 safe)
+    func refreshSessionWithLock() async -> Bool {
+        // If refresh is already in progress, wait for it
+        if let existingTask = refreshTask {
+            print("🔄 [Auth] Refresh already in progress, waiting...")
+            return await existingTask.value
+        }
+        
+        // Perform refresh directly (no separate Task needed since we're already @MainActor)
         guard let rt = UserDefaults.standard.string(forKey: refreshTokenKey) else {
             print("❌ [Auth] No refresh token available")
             return false
         }
 
-        struct RefreshPayload: Encodable { let refresh_token: String }
+        // Mark refresh in progress with a placeholder task
+        let task = Task { @MainActor in
+            return await self.doRefresh(refreshToken: rt)
+        }
+        refreshTask = task
+        
+        let result = await task.value
+        refreshTask = nil
+        
+        return result
+    }
+
+    // Separate function to perform the actual refresh
+    private func doRefresh(refreshToken rt: String) async -> Bool {
         do {
-            // NOTE: For refresh, we do NOT require auth headers
+            print("🔄 [Auth] Refreshing session...")
             let refreshed: AuthResponse = try await client.post(
                 path: "/auth/v1/token",
                 body: ["refresh_token": rt],
                 queryItems: [URLQueryItem(name: "grant_type", value: "refresh_token")],
                 requiresAuth: false
             )
-            // Minimal, MainActor-safe state write
-            await saveSession(accessToken: refreshed.accessToken, refreshToken: refreshed.refreshToken)
+            
+            saveSession(accessToken: refreshed.accessToken, refreshToken: refreshed.refreshToken)
             print("✅ [Auth] Session refreshed")
             isAuthenticated = true
             return true
         } catch {
             print("❌ [Auth] Refresh failed: \(error)")
-            // Hard sign-out on failed refresh
             client.clearAuthToken()
             UserDefaults.standard.removeObject(forKey: refreshTokenKey)
             isAuthenticated = false
             currentUser = nil
             return false
         }
+    }
+
+    // Keep old method for backward compatibility
+    func refreshSession() async -> Bool {
+        return await refreshSessionWithLock()
     }
     
     @MainActor

@@ -1,158 +1,241 @@
 // Views/MainTabView.swift
-// Week 7: Main tab bar with Rank tab added
+// Main tab bar with Gourney design system
+// Tab order: Feed, Discover, Add, Rank, Lists, Profile
 
 import SwiftUI
 
 struct MainTabView: View {
     @State private var selectedTab = 0
     
+    // Gourney coral color
+    private let coralColor = Color(red: 1.0, green: 0.4, blue: 0.4)
+    
     var body: some View {
         TabView(selection: $selectedTab) {
-            // Tab 1: Discover (ACTIVE)
-            DiscoverView()
+            // Tab 1: Feed (Home)
+            FeedView()
                 .tabItem {
-                    Label(
-                        NSLocalizedString("tab.discover", comment: ""),
-                        systemImage: selectedTab == 0 ? "map.fill" : "map"
-                    )
+                    Image(systemName: selectedTab == 0 ? "house.fill" : "house")
+                        .environment(\.symbolVariants, .none)
+                    Text("Feed")
                 }
                 .tag(0)
             
-            // Tab 2: Add Visit (ACTIVE - Testing)
-            AddVisitView()
+            // Tab 2: Discover (Search/Map)
+            DiscoverView()
                 .tabItem {
-                    Label(
-                        NSLocalizedString("tab.add", comment: ""),
-                        systemImage: selectedTab == 1 ? "plus.circle.fill" : "plus.circle"
-                    )
+                    Image(systemName: selectedTab == 1 ? "magnifyingglass.circle.fill" : "magnifyingglass")
+                        .environment(\.symbolVariants, .none)
+                    Text("Discover")
                 }
                 .tag(1)
             
-            // Tab 3: Lists (ACTIVE - Day 3-4)
-            ListsView()
+            // Tab 3: Add Visit (Center)
+            AddVisitView()
                 .tabItem {
-                    Label(
-                        NSLocalizedString("tab.lists", comment: ""),
-                        systemImage: selectedTab == 2 ? "list.bullet.rectangle.fill" : "list.bullet.rectangle"
-                    )
+                    Image(systemName: "plus.circle.fill")
+                        .environment(\.symbolVariants, .none)
+                    Text("Add")
                 }
                 .tag(2)
             
-            // Tab 4: Rank (ACTIVE - Week 7)
+            // Tab 4: Rank (Leaderboard)
             RankView()
                 .tabItem {
-                    Label(
-                        NSLocalizedString("tab.rank", comment: ""),
-                        systemImage: selectedTab == 3 ? "trophy.fill" : "trophy"
-                    )
+                    Image(systemName: selectedTab == 3 ? "trophy.fill" : "trophy")
+                        .environment(\.symbolVariants, .none)
+                    Text("Rank")
                 }
                 .tag(3)
             
-            // Tab 5: Feed (Placeholder for Day 6)
-            FeedPlaceholderView()
+            // Tab 5: Lists
+            ListsView()
                 .tabItem {
-                    Label(
-                        NSLocalizedString("tab.feed", comment: ""),
-                        systemImage: selectedTab == 4 ? "house.fill" : "house"
-                    )
+                    Image(systemName: selectedTab == 4 ? "bookmark.fill" : "bookmark")
+                        .environment(\.symbolVariants, .none)
+                    Text("Lists")
                 }
                 .tag(4)
             
-            // Tab 6: Profile (Placeholder for Day 7)
+            // Tab 6: Profile
             ProfilePlaceholderView()
                 .tabItem {
-                    Label(
-                        NSLocalizedString("tab.profile", comment: ""),
-                        systemImage: selectedTab == 5 ? "person.fill" : "person"
-                    )
+                    Image(systemName: selectedTab == 5 ? "person.fill" : "person")
+                        .environment(\.symbolVariants, .none)
+                    Text("Profile")
                 }
                 .tag(5)
         }
-        .tint(.blue)
-    }
-}
-
-// MARK: - Placeholder Views (Temporary for Days 6-7)
-
-struct FeedPlaceholderView: View {
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 16) {
-                Image(systemName: "house")
-                    .font(.system(size: 64))
-                    .foregroundColor(.secondary)
-                Text("Feed")
-                    .font(.headline)
-                    .foregroundColor(.secondary)
-                Text("Coming in Day 6")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            .navigationTitle("Feed")
+        .tint(coralColor)
+        .onAppear {
+            configureTabBarAppearance()
         }
     }
+    
+    private func configureTabBarAppearance() {
+        let appearance = UITabBarAppearance()
+        appearance.configureWithDefaultBackground()
+        
+        // Smaller font for tab labels
+        let normalAttrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: 10, weight: .medium)
+        ]
+        let selectedAttrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: 10, weight: .semibold),
+            .foregroundColor: UIColor(red: 1.0, green: 0.4, blue: 0.4, alpha: 1.0)
+        ]
+        
+        // Normal state
+        appearance.stackedLayoutAppearance.normal.titleTextAttributes = normalAttrs
+        appearance.stackedLayoutAppearance.normal.iconColor = UIColor.secondaryLabel
+        
+        // Selected state
+        appearance.stackedLayoutAppearance.selected.titleTextAttributes = selectedAttrs
+        appearance.stackedLayoutAppearance.selected.iconColor = UIColor(red: 1.0, green: 0.4, blue: 0.4, alpha: 1.0)
+        
+        UITabBar.appearance().standardAppearance = appearance
+        UITabBar.appearance().scrollEdgeAppearance = appearance
+    }
 }
+
+// MARK: - Profile Placeholder
 
 struct ProfilePlaceholderView: View {
     @StateObject private var authManager = AuthManager.shared
+    @Environment(\.colorScheme) private var colorScheme
+    
+    private let coralColor = Color(red: 1.0, green: 0.4, blue: 0.4)
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 20) {
-                Image(systemName: "person.circle")
-                    .font(.system(size: 64))
-                    .foregroundColor(.secondary)
-                
-                Text("Profile")
-                    .font(.headline)
-                    .foregroundColor(.secondary)
-                
-                Text("Coming in Day 7")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-             
-                
-                // Show current user info
-                if let user = authManager.currentUser {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Logged in as:")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        
-                        Text("@\(user.handle)")
-                            .font(.headline)
-                        
-                        Text(user.displayName)
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
+            ScrollView {
+                VStack(spacing: 24) {
+                    // Profile Header
+                    profileHeader
+                    
+                    // Stats Row
+                    if let user = authManager.currentUser {
+                        statsRow(user: user)
                     }
-                    .padding()
-                    .background(Color(.systemGray6))
-                    .cornerRadius(10)
-                    .padding(.horizontal)
+                    
+                    Divider()
+                        .padding(.horizontal, 20)
+                    
+                    // Coming Soon
+                    comingSoonSection
+                    
+                    // Sign Out Button
+                    signOutButton
+                    
+                    Spacer(minLength: 100)
                 }
-                
-                // Sign Out Button
-                Button(action: {
-                    authManager.signOut()
-                }) {
-                    Text("Sign Out")
-                        .fontWeight(.semibold)
-                        .foregroundColor(.red)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 50)
-                        .background(Color(.systemGray6))
-                        .cornerRadius(10)
-                }
-                .padding(.horizontal)
-                .padding(.top, 20)
             }
+            .background(colorScheme == .dark ? Color.black : Color(.systemGroupedBackground))
             .navigationTitle("Profile")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+    
+    private var profileHeader: some View {
+        VStack(spacing: 12) {
+            // Avatar
+            if let user = authManager.currentUser,
+               let avatarUrl = user.avatarUrl,
+               let url = URL(string: avatarUrl) {
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: 80, height: 80)
+                            .clipShape(Circle())
+                    default:
+                        defaultAvatar
+                    }
+                }
+            } else {
+                defaultAvatar
+            }
+            
+            // Name & Handle
+            if let user = authManager.currentUser {
+                VStack(spacing: 4) {
+                    Text(user.displayName)
+                        .font(.system(size: 20, weight: .bold))
+                        .foregroundColor(.primary)
+                    
+                    Text("@\(user.handle)")
+                        .font(.system(size: 15))
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+        .padding(.top, 20)
+    }
+    
+    private func statsRow(user: User) -> some View {
+        HStack(spacing: 40) {
+            statItem(value: user.visitCount ?? 0, label: "Visits")
+            statItem(value: user.followerCount ?? 0, label: "Followers")
+            statItem(value: user.followingCount ?? 0, label: "Following")
+        }
+        .padding(.vertical, 16)
+    }
+    
+    private var comingSoonSection: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "hammer.fill")
+                .font(.system(size: 40))
+                .foregroundColor(coralColor.opacity(0.5))
+            
+            Text("Profile Coming Soon")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundColor(.secondary)
+        }
+        .padding(.vertical, 40)
+    }
+    
+    private var signOutButton: some View {
+        Button(action: {
+            authManager.signOut()
+        }) {
+            HStack {
+                Image(systemName: "rectangle.portrait.and.arrow.right")
+                Text("Sign Out")
+            }
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundColor(.red)
+            .frame(maxWidth: .infinity)
+            .frame(height: 50)
+            .background(Color(.systemGray6))
+            .cornerRadius(12)
+        }
+        .padding(.horizontal, 20)
+    }
+    
+    private var defaultAvatar: some View {
+        Circle()
+            .fill(Color(.systemGray5))
+            .frame(width: 80, height: 80)
+            .overlay {
+                Image(systemName: "person.fill")
+                    .font(.system(size: 32))
+                    .foregroundColor(.secondary)
+            }
+    }
+    
+    private func statItem(value: Int, label: String) -> some View {
+        VStack(spacing: 4) {
+            Text("\(value)")
+                .font(.system(size: 18, weight: .bold))
+                .foregroundColor(.primary)
+            Text(label)
+                .font(.system(size: 13))
+                .foregroundColor(.secondary)
         }
     }
 }
-
-// MARK: - Preview
 
 #Preview {
     MainTabView()

@@ -877,16 +877,19 @@
     "Click the link in the email to verify your account. Once verified, you'll complete your profile in the app." : {
 
     },
+    "Close" : {
+
+    },
     "Closed" : {
 
     },
-    "Coming in Day 6" : {
-
-    },
-    "Coming in Day 7" : {
-
-    },
     "Coming soon" : {
+
+    },
+    "Comments" : {
+
+    },
+    "Comments for visit: %@" : {
 
     },
     "common.cancel" : {
@@ -1183,6 +1186,9 @@
 
     },
     "Directions" : {
+
+    },
+    "Discover" : {
 
     },
     "Discover, follow & share the Deli" : {
@@ -1578,6 +1584,9 @@
 
     },
     "Following" : {
+
+    },
+    "For You" : {
 
     },
     "Gourney" : {
@@ -2172,9 +2181,6 @@
         }
       }
     },
-    "Logged in as:" : {
-
-    },
     "N/A" : {
 
     },
@@ -2205,6 +2211,12 @@
     "No rankings yet" : {
 
     },
+    "No results for \"%@\"" : {
+
+    },
+    "No results found" : {
+
+    },
     "No visit photos yet" : {
 
     },
@@ -2233,6 +2245,9 @@
 
     },
     "Photo %lld" : {
+
+    },
+    "Photo unavailable" : {
 
     },
     "Photo Upload Test" : {
@@ -2425,6 +2440,12 @@
 
     },
     "Profile" : {
+
+    },
+    "Profile Coming Soon" : {
+
+    },
+    "Rank" : {
 
     },
     "rank.coming_soon.message" : {
@@ -2809,6 +2830,12 @@
     "Save" : {
 
     },
+    "Save %@ to list" : {
+
+    },
+    "Save to List" : {
+
+    },
     "Search for a place" : {
 
     },
@@ -2816,6 +2843,9 @@
 
     },
     "Search Places" : {
+
+    },
+    "Search places, users..." : {
 
     },
     "Search places..." : {
@@ -3006,6 +3036,9 @@
     "Try a different search" : {
 
     },
+    "Try Again" : {
+
+    },
     "Try searching or adjust your filters" : {
 
     },
@@ -3037,6 +3070,9 @@
 
     },
     "Who can see this?" : {
+
+    },
+    "You're all caught up" : {
 
     },
     "Your Rank" : {
