@@ -4,6 +4,7 @@
 
 import SwiftUI
 
+
 // MARK: - Gourney Colors
 
 struct GourneyColors {
@@ -14,6 +15,7 @@ struct GourneyColors {
         startPoint: .topLeading,
         endPoint: .bottomTrailing
     )
+    static let coralDark = Color(red: 0.95, green: 0.3, blue: 0.3)
 }
 
 // MARK: - Avatar View (Matches RankView style)

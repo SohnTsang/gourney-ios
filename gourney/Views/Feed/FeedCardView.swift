@@ -1,5 +1,6 @@
 // Views/Feed/FeedCardView.swift
-// Elegant feed card with unique Gourney design
+// Elegant feed card using shared PhotoCarouselView
+// Instagram-style dynamic photo height
 
 import SwiftUI
 
@@ -34,30 +35,23 @@ struct FeedCardView: View {
     // MARK: - Photo Section
     
     private var photoSection: some View {
-        ZStack(alignment: .topTrailing) {
-            TabView(selection: $currentPhotoIndex) {
-                ForEach(Array(item.photos.enumerated()), id: \.offset) { index, urlString in
-                    PhotoView(urlString: urlString)
-                        .tag(index)
-                }
-            }
-            .tabViewStyle(.page(indexDisplayMode: .never))
-            .frame(height: 320)
+        ZStack {
+            PhotoCarouselView(
+                photos: item.photos,
+                currentIndex: $currentPhotoIndex
+            )
             
+            // Gradient overlay
             LinearGradient(
-                colors: [.black.opacity(0.3), .clear, .black.opacity(0.5)],
+                colors: [.black.opacity(0.4), .clear, .clear],
                 startPoint: .top,
                 endPoint: .bottom
             )
+            .allowsHitTesting(false)
             
-            // Menu button - no background, 44x44 touch area
-            menuButton(onPhoto: true)
-                .padding(.top, 4)
-                .padding(.trailing, 16)
-            
+            // User info - top left
             VStack {
-                Spacer()
-                HStack(alignment: .bottom) {
+                HStack {
                     Button { onUserTap?() } label: {
                         HStack(spacing: 10) {
                             AvatarView(url: item.user.avatarUrl, size: 36)
@@ -77,21 +71,18 @@ struct FeedCardView: View {
                     
                     Spacer()
                     
-                    if item.photos.count > 1 {
-                        Text("\(currentPhotoIndex + 1)/\(item.photos.count)")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Capsule().fill(.black.opacity(0.5)))
-                    }
+                    // Menu button - top right
+                    menuButton(onPhoto: true)
                 }
-                .padding(12)
+                .padding(.horizontal, 12)
+                .padding(.top, 12)
+                
+                Spacer()
             }
         }
     }
     
-    // MARK: - Menu Button (No visible background, 44x44 touch area)
+    // MARK: - Menu Button
     
     private func menuButton(onPhoto: Bool) -> some View {
         Button {
@@ -224,55 +215,7 @@ struct FeedCardView: View {
     }
 }
 
-// MARK: - Photo View
-
-struct PhotoView: View {
-    let urlString: String
-    
-    var body: some View {
-        if let url = URL(string: urlString), url.scheme != nil {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .success(let image):
-                    image
-                        .resizable()
-                        .scaledToFill()
-                        .frame(height: 320)
-                        .clipped()
-                case .failure:
-                    placeholderView
-                case .empty:
-                    Rectangle()
-                        .fill(Color(.systemGray5))
-                        .frame(height: 320)
-                        .overlay(ProgressView().tint(GourneyColors.coral))
-                @unknown default:
-                    placeholderView
-                }
-            }
-        } else {
-            placeholderView
-        }
-    }
-    
-    private var placeholderView: some View {
-        Rectangle()
-            .fill(Color(.systemGray5))
-            .frame(height: 320)
-            .overlay(
-                VStack(spacing: 8) {
-                    Image(systemName: "photo")
-                        .font(.system(size: 32))
-                        .foregroundColor(.secondary.opacity(0.5))
-                    Text("Photo unavailable")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                }
-            )
-    }
-}
-
-// MARK: - Feed Menu Bottom Sheet (Instagram style)
+// MARK: - Feed Menu Bottom Sheet
 
 struct FeedMenuSheet: View {
     let item: FeedItem
@@ -282,51 +225,40 @@ struct FeedMenuSheet: View {
     var onReport: (() -> Void)?
     
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.colorScheme) private var colorScheme
     
     var body: some View {
         VStack(spacing: 0) {
-            // Drag indicator
             Capsule()
                 .fill(Color(.systemGray3))
                 .frame(width: 36, height: 5)
                 .padding(.top, 8)
                 .padding(.bottom, 20)
             
-            // Menu options
             VStack(spacing: 0) {
                 menuRow(icon: "person.circle", title: "View Profile", subtitle: "@\(item.user.handle)") {
                     dismiss()
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                        onViewProfile?()
-                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { onViewProfile?() }
                 }
                 
                 Divider().padding(.leading, 56)
                 
                 menuRow(icon: "mappin.circle", title: "View Place", subtitle: item.place.displayName) {
                     dismiss()
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                        onViewPlace?()
-                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { onViewPlace?() }
                 }
                 
                 Divider().padding(.leading, 56)
                 
                 menuRow(icon: "bookmark.circle", title: "Save to List") {
                     dismiss()
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                        onSaveToList?()
-                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { onSaveToList?() }
                 }
                 
                 Divider().padding(.leading, 56)
                 
                 menuRow(icon: "flag.circle", title: "Report", isDestructive: true) {
                     dismiss()
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                        onReport?()
-                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { onReport?() }
                 }
             }
             
@@ -382,7 +314,7 @@ struct FeedCardSkeleton: View {
         VStack(alignment: .leading, spacing: 0) {
             Rectangle()
                 .fill(Color(.systemGray5))
-                .frame(height: 320)
+                .frame(height: UIScreen.main.bounds.width)
             
             VStack(alignment: .leading, spacing: 12) {
                 VStack(alignment: .leading, spacing: 6) {
@@ -430,7 +362,10 @@ extension FeedItem {
             id: "preview-1",
             rating: 4,
             comment: "Amazing ramen! The broth was incredibly rich and flavorful.",
-            photoUrls: ["https://images.unsplash.com/photo-1569718212165-3a8278d5f624?w=800"],
+            photoUrls: [
+                "https://images.unsplash.com/photo-1569718212165-3a8278d5f624?w=800",
+                "https://images.unsplash.com/photo-1617196034183-421b4917c92d?w=800"
+            ],
             visibility: "public",
             createdAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(-3600)),
             visitedAt: "2025-01-15",
@@ -468,11 +403,4 @@ extension FeedItem {
         FeedCardView(item: .previewNoPhoto, showMenuForId: .constant(nil))
     }
     .background(Color(.systemGroupedBackground))
-}
-
-#Preview("Menu Sheet") {
-    Text("Tap to show")
-        .sheet(isPresented: .constant(true)) {
-            FeedMenuSheet(item: .preview)
-        }
 }

@@ -1,12 +1,12 @@
 // Views/Feed/FeedView.swift
 // "For You" feed with Gourney branding, search, and infinite scroll
+// NavigationStack with push to FeedDetailView on comment tap
 
 import SwiftUI
 
 struct FeedView: View {
     @StateObject private var viewModel = FeedViewModel()
     @State private var showSearch = false
-    @State private var showComments = false
     @State private var showSaveToList = false
     @State private var selectedItem: FeedItem?
     @State private var showUserProfile = false
@@ -14,10 +14,10 @@ struct FeedView: View {
     @State private var showPlaceDetail = false
     @State private var selectedPlaceId: String?
     @State private var showMenuForId: String?
+    @State private var navigateToDetail: FeedItem?
     
     @Environment(\.colorScheme) private var colorScheme
     
-    // Computed binding for menu sheet
     private var showMenuSheet: Binding<Bool> {
         Binding(
             get: { showMenuForId != nil },
@@ -31,34 +31,38 @@ struct FeedView: View {
     }
     
     var body: some View {
-        VStack(spacing: 0) {
-            headerView
-            searchBarButton
-            
-            if viewModel.isLoading && viewModel.items.isEmpty {
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(0..<3, id: \.self) { _ in
-                            FeedCardSkeleton()
-                                .padding(.bottom, 8)
+        NavigationStack {
+            VStack(spacing: 0) {
+                headerView
+                searchBarButton
+                
+                if viewModel.isLoading && viewModel.items.isEmpty {
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            ForEach(0..<3, id: \.self) { _ in
+                                FeedCardSkeleton()
+                                    .padding(.bottom, 8)
+                            }
                         }
                     }
+                } else if let error = viewModel.error, viewModel.items.isEmpty {
+                    ErrorStateView(message: error) {
+                        Task { await viewModel.refresh() }
+                    }
+                } else if viewModel.items.isEmpty {
+                    emptyStateView
+                } else {
+                    feedScrollView
                 }
-            } else if let error = viewModel.error, viewModel.items.isEmpty {
-                ErrorStateView(message: error) {
-                    Task { await viewModel.refresh() }
-                }
-            } else if viewModel.items.isEmpty {
-                emptyStateView
-            } else {
-                feedScrollView
+            }
+            .background(Color(.systemGroupedBackground))
+            .navigationBarHidden(true)
+            .navigationDestination(item: $navigateToDetail) { item in
+                FeedDetailView(feedItem: item, feedViewModel: viewModel)
             }
         }
-        .background(Color(.systemGroupedBackground))
-        .task {
-            if viewModel.items.isEmpty {
-                await viewModel.loadFeed()
-            }
+        .onAppear {
+            viewModel.loadFeed()
         }
         .sheet(isPresented: showMenuSheet) {
             if let item = menuItem {
@@ -76,15 +80,8 @@ struct FeedView: View {
                         selectedItem = item
                         showSaveToList = true
                     },
-                    onReport: {
-                        // TODO: Implement report
-                    }
+                    onReport: { }
                 )
-            }
-        }
-        .sheet(isPresented: $showComments) {
-            if let item = selectedItem {
-                CommentsSheet(visitId: item.id, visitOwnerId: item.user.id)
             }
         }
         .sheet(isPresented: $showSaveToList) {
@@ -113,9 +110,7 @@ struct FeedView: View {
             Spacer()
         }
         .overlay(alignment: .trailing) {
-            Button {
-                // TODO: Show notifications
-            } label: {
+            Button { } label: {
                 Image(systemName: "bell")
                     .font(.system(size: 20))
                     .foregroundColor(.primary)
@@ -163,20 +158,13 @@ struct FeedView: View {
                 ForEach(viewModel.items) { item in
                     FeedCardView(
                         item: item,
-                        onLikeTap: {
-                            viewModel.toggleLike(for: item)
-                        },
-                        onCommentTap: {
-                            selectedItem = item
-                            showComments = true
-                        },
+                        onLikeTap: { viewModel.toggleLike(for: item) },
+                        onCommentTap: { navigateToDetail = item },
                         onSaveTap: {
                             selectedItem = item
                             showSaveToList = true
                         },
-                        onShareTap: {
-                            shareItem(item)
-                        },
+                        onShareTap: { shareItem(item) },
                         onUserTap: {
                             selectedUserId = item.user.id
                             showUserProfile = true
@@ -195,8 +183,7 @@ struct FeedView: View {
                 if viewModel.isLoadingMore {
                     HStack {
                         Spacer()
-                        ProgressView()
-                            .tint(GourneyColors.coral)
+                        ProgressView().tint(GourneyColors.coral)
                         Spacer()
                     }
                     .padding(.vertical, 20)
@@ -221,9 +208,7 @@ struct FeedView: View {
             title: "Welcome to Gourney!",
             message: "Follow friends to see their restaurant visits, or discover new places from the community.",
             actionTitle: "Find Friends"
-        ) {
-            // TODO: Navigate to discover/suggested follows
-        }
+        ) { }
     }
     
     // MARK: - Share
@@ -233,9 +218,7 @@ struct FeedView: View {
         let url = URL(string: "https://gourney.app/visit/\(item.id)")
         
         var items: [Any] = [text]
-        if let url = url {
-            items.append(url)
-        }
+        if let url = url { items.append(url) }
         
         let activityVC = UIActivityViewController(activityItems: items, applicationActivities: nil)
         
@@ -246,27 +229,7 @@ struct FeedView: View {
     }
 }
 
-// MARK: - Placeholder Sheets
-
-struct CommentsSheet: View {
-    let visitId: String
-    let visitOwnerId: String
-    @Environment(\.dismiss) var dismiss
-    
-    var body: some View {
-        NavigationStack {
-            Text("Comments for visit: \(visitId)")
-                .navigationTitle("Comments")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Close") { dismiss() }
-                            .foregroundColor(GourneyColors.coral)
-                    }
-                }
-        }
-    }
-}
+// MARK: - Save To List Sheet
 
 struct SaveToListSheet: View {
     let placeId: String

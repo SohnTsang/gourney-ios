@@ -9,27 +9,26 @@ import Foundation
 struct FeedResponse: Codable {
     let items: [FeedItem]
     let hasMore: Bool
-    let nextOffset: Int?
+    let nextCursor: String?
 }
 
 // MARK: - Feed Item
 
-struct FeedItem: Codable, Identifiable, Equatable {
+struct FeedItem: Codable, Identifiable, Equatable, Hashable {
     let id: String
     let rating: Int?
     let comment: String?
-    let photoUrls: [String]?  // Optional to handle null/missing
+    let photoUrls: [String]?
     let visibility: String
     let createdAt: String
     let visitedAt: String?
-    let likeCount: Int
-    let commentCount: Int
+    var likeCount: Int
+    var commentCount: Int
     var isLiked: Bool
     let isFollowing: Bool
     let user: FeedUser
     let place: FeedPlace
     
-    /// Safe accessor for photo URLs (never nil)
     var photos: [String] {
         photoUrls ?? []
     }
@@ -37,11 +36,15 @@ struct FeedItem: Codable, Identifiable, Equatable {
     static func == (lhs: FeedItem, rhs: FeedItem) -> Bool {
         lhs.id == rhs.id
     }
+    
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
 }
 
 // MARK: - Feed User
 
-struct FeedUser: Codable, Equatable {
+struct FeedUser: Codable, Equatable, Hashable {
     let id: String
     let handle: String
     let displayName: String?
@@ -57,11 +60,15 @@ struct FeedUser: Codable, Equatable {
     static func == (lhs: FeedUser, rhs: FeedUser) -> Bool {
         lhs.id == rhs.id
     }
+    
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
 }
 
 // MARK: - Feed Place
 
-struct FeedPlace: Codable, Equatable {
+struct FeedPlace: Codable, Equatable, Hashable {
     let id: String
     let nameEn: String?
     let nameJa: String?
@@ -97,5 +104,9 @@ struct FeedPlace: Codable, Equatable {
     
     static func == (lhs: FeedPlace, rhs: FeedPlace) -> Bool {
         lhs.id == rhs.id
+    }
+    
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
     }
 }

@@ -231,7 +231,7 @@ class PhotoUploadService {
         let timestamp = Int(Date().timeIntervalSince1970 * 1000)
         let uniqueId = UUID().uuidString.prefix(8)  // First 8 chars of UUID
         let filename = "\(timestamp)-\(index)-\(uniqueId).jpg"
-        let fullPath = "\(userId)/\(filename)"
+        let fullPath = "\(userId)/visits/\(filename)"
         
         progressHandler?(0.5)
         
