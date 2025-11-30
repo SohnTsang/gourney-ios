@@ -21,6 +21,7 @@ struct DetailTopBar: View {
     var rightButtonDisabled: Bool = false
     var rightButtonLoading: Bool = false
     var showRightButton: Bool = false
+    var usePrimaryColor: Bool = false  // New: use black/white instead of coral
     var onBack: () -> Void
     var onRightAction: (() -> Void)? = nil
     
@@ -51,6 +52,7 @@ struct DetailTopBar: View {
                     icon: rightButtonIcon,
                     isDisabled: rightButtonDisabled,
                     isLoading: rightButtonLoading,
+                    usePrimaryColor: usePrimaryColor,
                     action: onRightAction ?? {}
                 )
             } else {
@@ -88,7 +90,13 @@ struct DetailActionButton: View {
     var icon: String? = nil
     var isDisabled: Bool = false
     var isLoading: Bool = false
+    var usePrimaryColor: Bool = false  // New: use black/white instead of coral
     let action: () -> Void
+    
+    private var buttonColor: Color {
+        if isDisabled { return .gray }
+        return usePrimaryColor ? .primary : GourneyColors.coral
+    }
     
     var body: some View {
         Button(action: action) {
@@ -108,7 +116,7 @@ struct DetailActionButton: View {
                     }
                 }
             }
-            .foregroundColor(isDisabled ? .gray : GourneyColors.coral)
+            .foregroundColor(buttonColor)
             .frame(minWidth: 44, minHeight: 44)
             .contentShape(Rectangle())
         }
@@ -135,6 +143,21 @@ struct DetailActionButton: View {
             title: "Edit Profile",
             rightButtonTitle: "Save",
             showRightButton: true,
+            onBack: {},
+            onRightAction: {}
+        )
+        Divider()
+        Spacer()
+    }
+}
+
+#Preview("Detail Top Bar - Menu (Primary Color)") {
+    VStack(spacing: 0) {
+        DetailTopBar(
+            title: "Visit",
+            rightButtonIcon: "ellipsis",
+            showRightButton: true,
+            usePrimaryColor: true,
             onBack: {},
             onRightAction: {}
         )

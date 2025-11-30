@@ -85,22 +85,22 @@
     "Add a description (optional)" : {
 
     },
-    "Add Cover Photo" : {
-
-    },
     "Add Photos" : {
 
     },
-    "Add Places" : {
+    "Add Place" : {
 
     },
-    "Add places from Discover or your visits" : {
+    "Add Places" : {
 
     },
     "Add the first photo here!" : {
 
     },
     "Add Visit" : {
+
+    },
+    "Add your first restaurant to this list" : {
 
     },
     "All" : {
@@ -110,9 +110,6 @@
 
     },
     "Already taken" : {
-
-    },
-    "Are you sure you want to delete this comment? This cannot be undone." : {
 
     },
     "auth.city.label" : {
@@ -1209,9 +1206,6 @@
     "Delete" : {
 
     },
-    "Delete Comment" : {
-
-    },
     "Description" : {
 
     },
@@ -1655,13 +1649,7 @@
     "Leaderboard" : {
 
     },
-    "likes" : {
-
-    },
     "List name" : {
-
-    },
-    "Lists" : {
 
     },
     "Lists with 3+ likes and 3+ places will appear here" : {
@@ -2322,6 +2310,9 @@
     "Photos" : {
 
     },
+    "Place" : {
+
+    },
     "place.add_visit" : {
       "comment" : "Add visit button",
       "extractionState" : "manual",
@@ -2929,12 +2920,6 @@
     "Settings" : {
 
     },
-    "Share your experience..." : {
-
-    },
-    "Share your thoughts" : {
-
-    },
     "Sign In" : {
 
     },
@@ -3096,7 +3081,7 @@
     "This email was already registered but not verified. We've sent you a new verification email." : {
 
     },
-    "This list doesn't have any places" : {
+    "This list is empty" : {
 
     },
     "Try a different search" : {
@@ -3132,9 +3117,6 @@
     "Visibility" : {
 
     },
-    "Visit" : {
-
-    },
     "Visits" : {
 
     },
@@ -3142,9 +3124,6 @@
 
     },
     "Website" : {
-
-    },
-    "Who can see this?" : {
 
     },
     "You have unsaved changes. Are you sure you want to discard them?" : {

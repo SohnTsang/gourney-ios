@@ -97,7 +97,7 @@ struct EditProfileView: View {
         }
     }
     
-    // MARK: - Avatar Section
+    // MARK: - Avatar Section (No pencil badge - just camera overlay)
     
     private var avatarSection: some View {
         VStack(spacing: 12) {
@@ -114,7 +114,7 @@ struct EditProfileView: View {
                     AvatarView(url: viewModel.avatarUrl, size: 100)
                 }
                 
-                // Camera overlay circle
+                // Camera overlay circle (shows on tap area)
                 Circle()
                     .fill(Color.black.opacity(0.4))
                     .frame(width: 100, height: 100)
@@ -124,17 +124,6 @@ struct EditProfileView: View {
                             .foregroundColor(.white)
                     )
                     .opacity(0.7)
-                
-                // Edit badge
-                Circle()
-                    .fill(GourneyColors.coral)
-                    .frame(width: 32, height: 32)
-                    .overlay(
-                        Image(systemName: "pencil")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(.white)
-                    )
-                    .offset(x: 36, y: 36)
             }
             .background(
                 GeometryReader { geo in
@@ -150,7 +139,6 @@ struct EditProfileView: View {
                 showPhotoPicker = true
             }
             .onLongPressGesture(minimumDuration: 0.3) {
-                // Only show preview if there's an avatar to show
                 if viewModel.selectedImage != nil || viewModel.avatarUrl != nil {
                     let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
                     impactFeedback.impactOccurred()
@@ -181,15 +169,12 @@ struct EditProfileView: View {
         VStack(spacing: 24) {
             // Personal Info Section
             VStack(alignment: .leading, spacing: 12) {
-                // Section header
                 Text("Personal Info")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(GourneyColors.coral)
                     .padding(.leading, 4)
                 
-                // Fields in a card
                 VStack(spacing: 0) {
-                    // Display Name
                     EditProfileCardField(
                         title: "Display Name",
                         text: $viewModel.displayName,
@@ -199,7 +184,6 @@ struct EditProfileView: View {
                     Divider()
                         .padding(.leading, 14)
                     
-                    // Handle (read-only)
                     EditProfileCardField(
                         title: "Username",
                         text: .constant(viewModel.handle),
@@ -213,7 +197,6 @@ struct EditProfileView: View {
             
             // Bio Section
             VStack(alignment: .leading, spacing: 12) {
-                // Section header with character count
                 HStack {
                     Text("Bio")
                         .font(.system(size: 14, weight: .semibold))
@@ -227,7 +210,6 @@ struct EditProfileView: View {
                 }
                 .padding(.horizontal, 4)
                 
-                // Bio field in a card
                 EditProfileBioCard(
                     text: $viewModel.bio,
                     placeholder: "Tell us about yourself..."
@@ -237,7 +219,7 @@ struct EditProfileView: View {
     }
 }
 
-// MARK: - Edit Profile Card Field (simple style without icons)
+// MARK: - Edit Profile Card Field
 
 struct EditProfileCardField: View {
     let title: String
@@ -281,7 +263,6 @@ struct EditProfileBioCard: View {
     
     var body: some View {
         ZStack(alignment: .topLeading) {
-            // Placeholder
             if text.isEmpty && !isFocused {
                 Text(placeholder)
                     .font(.system(size: 16))
@@ -290,7 +271,6 @@ struct EditProfileBioCard: View {
                     .padding(.vertical, 14)
             }
             
-            // TextEditor
             TextEditor(text: $text)
                 .font(.system(size: 16))
                 .foregroundColor(.primary)
@@ -336,12 +316,11 @@ class EditProfileViewModel: ObservableObject {
     func loadCurrentProfile() {
         guard let user = AuthManager.shared.currentUser else { return }
         
-        displayName = user.displayName ?? ""
+        displayName = user.displayName
         handle = user.handle
         bio = user.bio ?? ""
         avatarUrl = user.avatarUrl
         
-        // Store originals for comparison
         originalDisplayName = displayName
         originalBio = bio
         originalAvatarUrl = avatarUrl
@@ -371,13 +350,11 @@ class EditProfileViewModel: ObservableObject {
         
         Task {
             do {
-                // Upload new avatar if selected
                 var newAvatarUrl: String? = nil
                 if let image = selectedImage {
                     newAvatarUrl = try await uploadAvatar(image)
                 }
                 
-                // Update profile via edge function
                 let updates: [String: Any] = [
                     "display_name": displayName,
                     "bio": bio,
@@ -390,7 +367,6 @@ class EditProfileViewModel: ObservableObject {
                     requiresAuth: true
                 )
                 
-                // Refresh user data
                 await AuthManager.shared.fetchCurrentUser()
                 
                 await MainActor.run {
@@ -412,7 +388,6 @@ class EditProfileViewModel: ObservableObject {
             throw NSError(domain: "EditProfile", code: 1, userInfo: [NSLocalizedDescriptionKey: "Not authenticated"])
         }
         
-        // Use dedicated AvatarUploadService (square crop, 100KB target)
         return try await AvatarUploadService.shared.uploadAvatar(image, userId: userId)
     }
 }
@@ -430,8 +405,6 @@ struct UpdatedUser: Codable {
     let bio: String?
     let avatarUrl: String?
 }
-
-// MARK: - Preview
 
 #Preview {
     NavigationStack {

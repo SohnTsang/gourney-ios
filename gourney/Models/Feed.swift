@@ -16,10 +16,10 @@ struct FeedResponse: Codable {
 
 struct FeedItem: Codable, Identifiable, Equatable, Hashable {
     let id: String
-    let rating: Int?
-    let comment: String?
-    let photoUrls: [String]?
-    let visibility: String
+    var rating: Int?
+    var comment: String?
+    var photoUrls: [String]?
+    var visibility: String
     let createdAt: String
     let visitedAt: String?
     var likeCount: Int

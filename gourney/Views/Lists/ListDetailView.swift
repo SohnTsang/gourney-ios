@@ -1,5 +1,6 @@
 // Views/Lists/ListDetailView.swift
-// ✅ Redesigned with Gourney design system + shared PlaceRowView
+// Redesigned with DetailTopBar + slide-up menu for owner actions
+// Consistent heart icon design matching FeedCardView
 
 import SwiftUI
 import PhotosUI
@@ -7,9 +8,9 @@ import Combine
 
 struct ListDetailView: View {
     @State var list: RestaurantList
-    let onListUpdated: ((String, Int) -> Void)?  // (listId, newCount)
+    let onListUpdated: ((String, Int) -> Void)?
     let isReadOnly: Bool
-    let ownerHandle: String?  // Add owner handle for display
+    let ownerHandle: String?
     
     @Environment(\.dismiss) var dismiss
     @StateObject private var viewModel = ListDetailViewModel()
@@ -19,19 +20,15 @@ struct ListDetailView: View {
     @State private var showDeleteAlert = false
     @State private var isDeleting = false
     @State private var showMenu = false
-    @State private var isLiked = false
-    @State private var likesCount: Int = 0
-    @State private var isProcessingLike = false
     @State private var selectedPlace: Place?
     @State private var showPlaceDetail = false
     @State private var showAddVisitFromDetail = false
+    @State private var pendingAddVisit = false
     @State private var refreshTrigger = UUID()
-    @State private var dragOffset: CGFloat = 0
     @State private var selectedCoverPhoto: PhotosPickerItem?
     @State private var isUploadingCover = false
     @Environment(\.colorScheme) private var colorScheme
     
-    // Check if this is a default list
     private var isDefaultList: Bool {
         let wantToTryTitle = NSLocalizedString("lists.default.want_to_try", comment: "")
         let favoritesTitle = NSLocalizedString("lists.default.favorites", comment: "")
@@ -46,347 +43,256 @@ struct ListDetailView: View {
     }
     
     var body: some View {
-        GeometryReader { geometry in
-            VStack(spacing: 0) {
-                // Custom Navigation Bar
-                ZStack {
-                    // Left Button - X icon
-                    HStack {
-                        Button {
-                            dismiss()
-                        } label: {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 17, weight: .semibold))
-                                .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
-                        }
-                        .padding(.leading, 16)
-                        Spacer()
-                    }
-                    
-                    // Centered Title
-                    VStack(spacing: 4) {
-                        Text(list.title)
-                            .font(.system(size: 17, weight: .semibold))
-                            .foregroundColor(.primary)
-                        
-                        // Show username for read-only lists
-                        if isReadOnly, let handle = ownerHandle {
-                            Text("@\(handle)")
-                                .font(.system(size: 13))
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                    
-                    // Right Button
-                    HStack {
-                        Spacer()
-                        if !isReadOnly {
-                            Button {
-                                withAnimation(.easeOut(duration: 0.2)) {
-                                    showMenu = true
-                                }
-                            } label: {
-                                Image(systemName: "ellipsis.circle")
-                                    .font(.system(size: 24))
-                                    .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
-                            }
-                            .padding(.trailing, 16)
-                        }
-                    }
-                }
-                .frame(height: 56)
-                .frame(maxWidth: .infinity)
-                .padding(.top, geometry.safeAreaInsets.top > 0 ? geometry.safeAreaInsets.top : 50)
-                .background(colorScheme == .dark ? Color.black : Color.white)
+        VStack(spacing: 0) {
+            // DetailTopBar - show 3 dots only for owner
+            ListDetailTopBar(
+                title: list.title,
+                subtitle: isReadOnly ? ownerHandle.map { "@\($0)" } : nil,
+                showMenu: !isReadOnly,
+                onBack: { dismiss() },
+                onMenu: { showMenu = true }
+            )
+            
+            // Content
+            ZStack {
+                Color(colorScheme == .dark ? .black : .systemGroupedBackground).ignoresSafeArea()
                 
-                // Content
-                ZStack {
-                    Color(colorScheme == .dark ? .black : .systemGroupedBackground).ignoresSafeArea()
-                    
-                    ScrollView {
-                        VStack(spacing: 0) {
-                            // Cover Image
-                            CoverImageView(
-                                coverUrl: list.coverPhotoUrl,
-                                isReadOnly: isReadOnly,
-                                onUpload: { image in
-                                    // Upload and get new URL
-                                    if let newUrl = await viewModel.uploadCover(listId: list.id, image: image) {
-                                        // Trigger parent to refresh this list
-                                        // Parent will reload and get updated cover from API
-                                        onListUpdated?(list.id, list.itemCount ?? 0)
-                                        
-                                        return newUrl
-                                    }
-                                    return nil
+                ScrollView {
+                    VStack(spacing: 0) {
+                        // Cover Image
+                        CoverImageView(
+                            coverUrl: list.coverPhotoUrl,
+                            isReadOnly: isReadOnly,
+                            onUpload: { image in
+                                if let newUrl = await viewModel.uploadCover(listId: list.id, image: image) {
+                                    onListUpdated?(list.id, list.itemCount ?? 0)
+                                    return newUrl
                                 }
-                            )
-                            
-                            // List Info Section
-                            VStack(spacing: 12) {
-                                // Stats Row - Places on left, Likes/Button on right
-                                HStack {
-                                    HStack(spacing: 6) {
-                                        Image(systemName: "mappin.circle.fill")
-                                            .font(.system(size: 16))
-                                            .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
-                                        Text("\(viewModel.places.count)")
-                                            .font(.system(size: 16, weight: .semibold))
-                                            .foregroundColor(.primary)
-                                        Text("places")
-                                            .font(.system(size: 14))
-                                            .foregroundColor(.secondary)
-                                    }
-                                    
-                                    Spacer()
-                                    
-                                    if list.visibility != "private" {
-                                        if isReadOnly {
-                                            // Like button for other users' lists
-                                            Button {
-                                                Task {
-                                                    await toggleLike()
-                                                }
-                                            } label: {
-                                                HStack(spacing: 8) {
-                                                    Image(systemName: isLiked ? "heart.fill" : "heart")
-                                                        .font(.system(size: 24, weight: .medium))
-                                                        .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
-                                                        .scaleEffect(isProcessingLike ? 1.2 : 1.0)
-                                                        .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isProcessingLike)
-                                                    
-                                                    Text("\(likesCount)")
-                                                        .font(.system(size: 16, weight: .semibold))
-                                                        .foregroundColor(.primary)
-                                                        .onAppear {
-                                                            print("❤️ [UI] Heart icon rendered: isLiked=\(isLiked), likesCount=\(likesCount)")
-                                                        }
-                                                        .onChange(of: likesCount) { oldValue, newValue in
-                                                            print("❤️ [UI] likesCount changed: \(oldValue) → \(newValue)")
-                                                        }
-                                                }
-                                            }
-                                            .disabled(isProcessingLike)
-                                        } else {
-                                            // Like count display for own lists
-                                            HStack(spacing: 6) {
-                                                Image(systemName: "heart.fill")
-                                                    .font(.system(size: 16))
-                                                    .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
-                                                Text("\(likesCount)")
-                                                    .font(.system(size: 16, weight: .semibold))
-                                                    .foregroundColor(.primary)
-                                                Text("likes")
-                                                    .font(.system(size: 14))
-                                                    .foregroundColor(.secondary)
-                                            }
-                                        }
-                                    }
-                                }
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 12)
+                                return nil
                             }
-                            .background(colorScheme == .dark ? Color(.systemBackground) : Color.white)
-                            
-                            // Places List
-                            if viewModel.places.isEmpty && !viewModel.isLoading {
-                                EmptyPlacesView(showAddPlace: $showAddPlace, isReadOnly: isReadOnly)
-                            } else {
-                                LazyVStack(spacing: 0) {
-                                    ForEach(viewModel.places) { item in
-                                        if !isReadOnly {
-                                            SwipeToDeleteRow(
-                                                item: item,
-                                                distance: item.place.map { locationManager.formattedDistance(from: $0.coordinate) } ?? nil,
-                                                onTap: {
-                                                    if let place = item.place {
-                                                        selectedPlace = place
-                                                        showPlaceDetail = true
-                                                    }
-                                                },
-                                                onDelete: {
-                                                    guard let placeId = item.place?.id else { return }
-                                                    
-                                                    Task {
-                                                        await viewModel.removePlace(
-                                                            listId: list.id,
-                                                            itemId: item.id,
-                                                            placeId: placeId,
-                                                            onSuccess: { newCount in
-                                                                print("🔄 [ListDetail] Received newCount: \(newCount)")
-                                                                list.itemCount = newCount
-                                                                onListUpdated?(list.id, newCount)
-                                                            }
-                                                        )
-                                                    }
+                        )
+                        
+                        // List Info Section
+                        VStack(spacing: 12) {
+                            // Stats Row - Places on left, Likes/Button on right
+                            HStack {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "mappin.circle.fill")
+                                        .font(.system(size: 16))
+                                        .foregroundColor(GourneyColors.coral)
+                                    Text("\(viewModel.places.count)")
+                                        .font(.system(size: 16, weight: .semibold))
+                                        .foregroundColor(.primary)
+                                    Text("places")
+                                        .font(.system(size: 14))
+                                        .foregroundColor(.secondary)
+                                }
+                                
+                                Spacer()
+                                
+                                if list.visibility != "private" {
+                                    if isReadOnly {
+                                        // Visitor: tappable heart button with animation
+                                        Button {
+                                            viewModel.toggleLike(listId: list.id)
+                                        } label: {
+                                            HStack(spacing: 4) {
+                                                Image(systemName: viewModel.isLiked ? "heart.fill" : "heart")
+                                                    .font(.system(size: 20))
+                                                    .foregroundColor(viewModel.isLiked ? GourneyColors.coral : .primary)
+                                                    .scaleEffect(viewModel.likeScale)
+                                                
+                                                if viewModel.likesCount > 0 {
+                                                    Text("\(viewModel.likesCount)")
+                                                        .font(.system(size: 14, weight: .medium))
+                                                        .foregroundColor(.secondary)
                                                 }
-                                            )
-                                            .transition(.asymmetric(
-                                                insertion: .opacity,
-                                                removal: .move(edge: .leading).combined(with: .opacity)
-                                            ))
-                                        } else {
-                                            PlaceRowView(
-                                                item: PlaceRowItem(from: item),
-                                                distance: item.place.map { locationManager.formattedDistance(from: $0.coordinate) } ?? nil,
-                                                showRemoveButton: false,
-                                                onRemove: nil
-                                            )
-                                            .contentShape(Rectangle())
-                                            .onTapGesture {
+                                            }
+                                            .frame(minWidth: 44, minHeight: 44)
+                                        }
+                                        .buttonStyle(.plain)
+                                    } else {
+                                        // Owner: always filled heart with count
+                                        HStack(spacing: 4) {
+                                            Image(systemName: "heart.fill")
+                                                .font(.system(size: 20))
+                                                .foregroundColor(GourneyColors.coral)
+                                            
+                                            Text("\(viewModel.likesCount)")
+                                                .font(.system(size: 14, weight: .medium))
+                                                .foregroundColor(.secondary)
+                                        }
+                                        .frame(minWidth: 44, minHeight: 44)
+                                    }
+                                }
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 12)
+                        }
+                        .background(colorScheme == .dark ? Color(.systemBackground) : Color.white)
+                        
+                        // Places List
+                        if viewModel.places.isEmpty && !viewModel.isLoading {
+                            EmptyPlacesView(showAddPlace: $showAddPlace, isReadOnly: isReadOnly)
+                        } else {
+                            LazyVStack(spacing: 0) {
+                                ForEach(viewModel.places) { item in
+                                    if !isReadOnly {
+                                        SwipeToDeleteRow(
+                                            item: item,
+                                            distance: item.place.map { locationManager.formattedDistance(from: $0.coordinate) } ?? nil,
+                                            onTap: {
                                                 if let place = item.place {
                                                     selectedPlace = place
                                                     showPlaceDetail = true
                                                 }
+                                            },
+                                            onDelete: {
+                                                guard let placeId = item.place?.id else { return }
+                                                
+                                                Task {
+                                                    await viewModel.removePlace(
+                                                        listId: list.id,
+                                                        itemId: item.id,
+                                                        placeId: placeId,
+                                                        onSuccess: { newCount in
+                                                            list.itemCount = newCount
+                                                            onListUpdated?(list.id, newCount)
+                                                        }
+                                                    )
+                                                }
+                                            }
+                                        )
+                                        .transition(.asymmetric(
+                                            insertion: .opacity,
+                                            removal: .move(edge: .leading).combined(with: .opacity)
+                                        ))
+                                    } else {
+                                        PlaceRowView(
+                                            item: PlaceRowItem(from: item),
+                                            distance: item.place.map { locationManager.formattedDistance(from: $0.coordinate) } ?? nil,
+                                            showRemoveButton: false,
+                                            onRemove: nil
+                                        )
+                                        .contentShape(Rectangle())
+                                        .onTapGesture {
+                                            if let place = item.place {
+                                                selectedPlace = place
+                                                showPlaceDetail = true
                                             }
                                         }
-                                        
-                                        if item.id != viewModel.places.last?.id {
-                                            Divider()
-                                                .padding(.leading, 90)
-                                        }
+                                    }
+                                    
+                                    if item.id != viewModel.places.last?.id {
+                                        Divider()
+                                            .padding(.leading, 90)
                                     }
                                 }
-                                .background(colorScheme == .dark ? Color(.systemBackground) : Color.white)
-                                .animation(.spring(response: 0.35, dampingFraction: 0.75), value: viewModel.places.count)
                             }
+                            .background(colorScheme == .dark ? Color(.systemBackground) : Color.white)
+                            .animation(.spring(response: 0.35, dampingFraction: 0.75), value: viewModel.places.count)
                         }
                     }
-                    
-                    if viewModel.isLoading {
-                        ProgressView()
-                            .tint(Color(red: 1.0, green: 0.4, blue: 0.4))
-                    }
+                }
+                
+                if viewModel.isLoading {
+                    ProgressView()
+                        .tint(GourneyColors.coral)
                 }
             }
-            .task {
-                // Load places and get like status via completion
-                await viewModel.loadPlaces(listId: list.id) { hasLiked, count in
-                    isLiked = hasLiked
-                    likesCount = count
-                    print("🔵 [ListDetail] Set initial like state: liked=\(hasLiked), count=\(count)")
-                }
-            }
-            .sheet(isPresented: $showAddPlace) {
-                AddPlaceToListSheet(listId: list.id, viewModel: viewModel)
-            }
-            .sheet(isPresented: $showPlaceDetail) {
-                if let place = selectedPlace {
-                    PlaceDetailSheet(
-                        placeId: place.id,
-                        displayName: place.displayName,
-                        lat: place.lat,
-                        lng: place.lng,
-                        formattedAddress: place.formattedAddress,
-                        phoneNumber: place.phone,
-                        website: place.website,
-                        photoUrls: place.photoUrls,
-                        googlePlaceId: place.googlePlaceId,
-                        primaryButtonTitle: "Add Visit",
-                        primaryButtonAction: {
-                            showAddVisitFromDetail = true
-                        },
-                        onDismiss: nil
-                    )
-                    .presentationDetents([.large])
-                    .presentationDragIndicator(.hidden)
-                    .id(refreshTrigger)
-                }
-            }
-            .fullScreenCover(isPresented: $showAddVisitFromDetail) {
-                if let place = selectedPlace {
-                    AddVisitView(
-                        prefilledPlace: PlaceSearchResult(from: place),
-                        showBackButton: true,
-                        onVisitPosted: { placeId in
-                            // Refresh the list and reload place detail
-                            Task {
-                                await viewModel.loadPlaces(listId: list.id)
-                                await MainActor.run {
-                                    refreshTrigger = UUID()
-                                }
-                            }
-                        }
-                    )
-                }
-            }
-            .overlay {
-                if showSettings {
-                    ListSettingsSheet(
-                        list: list,
-                        isPresented: $showSettings,
-                        onSave: { updatedList in
-                            list = updatedList
-                            onListUpdated?(list.id, list.itemCount ?? 0)
-                        }
-                    )
-                }
-            }
-            .overlay {
-                if showMenu {
-                    CustomContextMenu(
-                        items: {
-                            var items = [
-                                ContextMenuItem(
-                                    icon: "gear",
-                                    title: "Settings",
-                                    isDestructive: false,
-                                    action: {
-                                        showSettings = true
-                                    }
-                                )
-                            ]
-                            if !isDefaultList {
-                                items.append(
-                                    ContextMenuItem(
-                                        icon: "trash",
-                                        title: "Delete List",
-                                        isDestructive: true,
-                                        action: {
-                                            showDeleteAlert = true
-                                        }
-                                    )
-                                )
-                            }
-                            return items
-                        }(),
-                        isPresented: $showMenu,
-                        alignment: .topTrailing,
-                        offset: CGSize(width: -12, height: 60)
-                    )
-                }
-            }
-            .customDeleteAlert(
-                isPresented: $showDeleteAlert,
-                title: "Delete List",
-                message: "This action cannot be undone.",
-                confirmTitle: "Delete"
-            ) {
-                Task {
-                    await deleteList()
-                }
-            }
-            .interactiveDismissDisabled(showSettings || showDeleteAlert || isDeleting)
         }
-        .offset(y: dragOffset)
-        .gesture(
-            DragGesture()
-                .onChanged { value in
-                    if value.translation.height > 0 {
-                        dragOffset = value.translation.height
+        .background(colorScheme == .dark ? Color.black : Color.white)
+        .navigationBarHidden(true)
+        .task {
+            await viewModel.loadPlaces(listId: list.id)
+        }
+        .sheet(isPresented: $showAddPlace) {
+            AddPlaceToListSheet(listId: list.id, viewModel: viewModel)
+        }
+        .sheet(isPresented: $showPlaceDetail) {
+            if let place = selectedPlace {
+                PlaceDetailSheet(
+                    placeId: place.id,
+                    displayName: place.displayName,
+                    lat: place.lat,
+                    lng: place.lng,
+                    formattedAddress: place.formattedAddress,
+                    phoneNumber: place.phone,
+                    website: place.website,
+                    photoUrls: place.photoUrls,
+                    googlePlaceId: place.googlePlaceId,
+                    primaryButtonTitle: "Add Visit",
+                    primaryButtonAction: {
+                        // Set flag and dismiss sheet
+                        pendingAddVisit = true
+                        showPlaceDetail = false
+                    },
+                    onDismiss: {
+                        showPlaceDetail = false
                     }
-                }
-                .onEnded { value in
-                    if value.translation.height > 100 {
-                        dismiss()
-                    } else {
-                        withAnimation(.spring(response: 0.3)) {
-                            dragOffset = 0
+                )
+                .presentationDetents([.large])
+                .presentationDragIndicator(.hidden)
+                .id(refreshTrigger)
+            }
+        }
+        .onChange(of: showPlaceDetail) { _, newValue in
+            // When sheet dismisses and we have pending AddVisit
+            if !newValue && pendingAddVisit {
+                pendingAddVisit = false
+                showAddVisitFromDetail = true
+            }
+        }
+        .fullScreenCover(isPresented: $showAddVisitFromDetail) {
+            if let place = selectedPlace {
+                AddVisitView(
+                    prefilledPlace: PlaceSearchResult(from: place),
+                    showBackButton: true,
+                    onVisitPosted: { placeId in
+                        showAddVisitFromDetail = false
+                        Task {
+                            await viewModel.loadPlaces(listId: list.id)
+                            await MainActor.run {
+                                refreshTrigger = UUID()
+                            }
                         }
                     }
+                )
+            }
+        }
+        .sheet(isPresented: $showMenu) {
+            ListDetailMenuSheet(
+                isDefaultList: isDefaultList,
+                onSettings: {
+                    showSettings = true
+                },
+                onDelete: {
+                    showDeleteAlert = true
                 }
-        )
-        .ignoresSafeArea()
+            )
+        }
+        .overlay {
+            if showSettings {
+                ListSettingsSheet(
+                    list: list,
+                    isPresented: $showSettings,
+                    onSave: { updatedList in
+                        list = updatedList
+                        onListUpdated?(list.id, list.itemCount ?? 0)
+                    }
+                )
+            }
+        }
+        .customDeleteAlert(
+            isPresented: $showDeleteAlert,
+            title: "Delete List",
+            message: "This action cannot be undone.",
+            confirmTitle: "Delete"
+        ) {
+            Task {
+                await deleteList()
+            }
+        }
     }
     
     // MARK: - Delete List
@@ -395,21 +301,16 @@ struct ListDetailView: View {
         isDeleting = true
         
         do {
-            // Optimistic UI - dismiss immediately for smooth UX
             await MainActor.run {
                 dismiss()
             }
             
-            // Background delete - build URL with query parameter
             let path = "/functions/v1/lists-delete?list_id=\(list.id)"
             let _: EmptyResponse = try await SupabaseClient.shared.delete(
                 path: path,
                 requiresAuth: true
             )
             
-            print("✅ [ListDetail] List deleted: \(list.title)")
-            
-            // Update parent view
             await MainActor.run {
                 onListUpdated?(list.id, 0)
                 isDeleting = false
@@ -422,70 +323,137 @@ struct ListDetailView: View {
         }
     }
     
-    // MARK: - Like Functions
+}
+
+// MARK: - List Detail Top Bar
+
+struct ListDetailTopBar: View {
+    let title: String
+    let subtitle: String?
+    let showMenu: Bool
+    let onBack: () -> Void
+    let onMenu: () -> Void
     
-    private func toggleLike() async {
-        isProcessingLike = true
-        
-        // Optimistic UI update with haptic feedback
-        if #available(iOS 17.0, *) {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        }
-        
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-            isLiked.toggle()
-            likesCount += isLiked ? 1 : -1
-        }
-        
-        do {
-            // Call backend edge function - consistent with likes-toggle for visits
-            let body: [String: String] = ["list_id": list.id]
-            let client = SupabaseClient.shared
-            
-            struct ListLikeToggleResponse: Codable {
-                let listId: String?
-                let liked: Bool
-                let likeCount: Int
-                let createdAt: String?
+    @Environment(\.colorScheme) private var colorScheme
+    
+    private var backgroundColor: Color {
+        colorScheme == .dark ? Color.black : Color.white
+    }
+    
+    var body: some View {
+        HStack {
+            // Left: Back button
+            Button(action: onBack) {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundColor(.primary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
             
-            let response: ListLikeToggleResponse = try await client.post(
-                path: "/functions/v1/lists-like-toggle",
-                body: body,
-                requiresAuth: true
-            )
+            Spacer()
             
-            // Update with actual server response
-            await MainActor.run {
-                isLiked = response.liked
-                likesCount = response.likeCount
+            // Center: Title + subtitle
+            VStack(spacing: 2) {
+                Text(title)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
                 
-                // Update the parent list object
-                list.likesCount = response.likeCount
-                
-                // Notify parent view to refresh if needed
-                onListUpdated?(list.id, list.itemCount ?? 0)
-            }
-            
-            print("✅ [List] Like toggled: \(response.liked ? "Liked" : "Unliked")")
-            
-        } catch {
-            // Revert on error
-            await MainActor.run {
-                withAnimation {
-                    isLiked.toggle()
-                    likesCount += isLiked ? 1 : -1
-                }
-                
-                // Show error feedback
-                if #available(iOS 17.0, *) {
-                    UINotificationFeedbackGenerator().notificationOccurred(.error)
+                if let subtitle = subtitle {
+                    Text(subtitle)
+                        .font(.system(size: 13))
+                        .foregroundColor(.secondary)
                 }
             }
-            print("❌ [List] Like toggle error: \(error)")
+            
+            Spacer()
+            
+            // Right: Menu button or spacer
+            if showMenu {
+                Button(action: onMenu) {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.primary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+            } else {
+                Color.clear
+                    .frame(width: 44, height: 44)
+            }
         }
-        
-        isProcessingLike = false
+        .padding(.horizontal, 8)
+        .frame(height: 44)
+        .background(backgroundColor)
+    }
+}
+
+// MARK: - List Detail Menu Sheet (Slide up)
+
+struct ListDetailMenuSheet: View {
+    let isDefaultList: Bool
+    let onSettings: () -> Void
+    let onDelete: () -> Void
+    
+    @Environment(\.dismiss) private var dismiss
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            Capsule()
+                .fill(Color(.systemGray3))
+                .frame(width: 36, height: 5)
+                .padding(.top, 8)
+                .padding(.bottom, 20)
+            
+            VStack(spacing: 0) {
+                // Settings
+                menuRow(icon: "gear", title: "Settings") {
+                    dismiss()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { onSettings() }
+                }
+                
+                // Delete (only for custom lists)
+                if !isDefaultList {
+                    Divider().padding(.leading, 56)
+                    
+                    menuRow(icon: "trash", title: "Delete List", isDestructive: true) {
+                        dismiss()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { onDelete() }
+                    }
+                }
+            }
+            
+            Spacer()
+        }
+        .presentationDetents([.height(isDefaultList ? 120 : 180)])
+        .presentationDragIndicator(.hidden)
+        .presentationCornerRadius(20)
+    }
+    
+    private func menuRow(icon: String, title: String, isDestructive: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                Image(systemName: icon)
+                    .font(.system(size: 20))
+                    .foregroundColor(isDestructive ? .red : .primary)
+                    .frame(width: 32)
+                
+                Text(title)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundColor(isDestructive ? .red : .primary)
+                
+                Spacer()
+                
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(Color(.systemGray3))
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -494,7 +462,7 @@ struct ListDetailView: View {
 struct CoverImageView: View {
     let coverUrl: String?
     let isReadOnly: Bool
-    let onUpload: (UIImage) async -> String?  // Returns new URL
+    let onUpload: (UIImage) async -> String?
     
     @State private var selectedItem: PhotosPickerItem?
     @State private var isUploading = false
@@ -502,7 +470,6 @@ struct CoverImageView: View {
     
     var body: some View {
         ZStack {
-            // Cover photo or placeholder
             ZStack(alignment: .bottomTrailing) {
                 if let url = currentCoverUrl ?? coverUrl {
                     AsyncImage(url: URL(string: url)) { phase in
@@ -536,7 +503,7 @@ struct CoverImageView: View {
                         .padding(.vertical, 7)
                         .background(
                             LinearGradient(
-                                colors: [Color(red: 1.0, green: 0.4, blue: 0.4), Color(red: 0.95, green: 0.3, blue: 0.35)],
+                                colors: [GourneyColors.coral, GourneyColors.coral.opacity(0.8)],
                                 startPoint: .leading,
                                 endPoint: .trailing
                             )
@@ -550,7 +517,6 @@ struct CoverImageView: View {
                 }
             }
             
-            // Loading overlay
             if isUploading {
                 Color.black.opacity(0.4)
                     .ignoresSafeArea()
@@ -593,75 +559,189 @@ struct CoverImageView: View {
         ZStack {
             LinearGradient(
                 colors: [
-                    Color(red: 1.0, green: 0.4, blue: 0.4).opacity(0.2),
-                    Color(red: 1.0, green: 0.5, blue: 0.5).opacity(0.1)
+                    GourneyColors.coral.opacity(0.2),
+                    GourneyColors.coral.opacity(0.1)
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
             
-            VStack(spacing: 12) {
-                Image(systemName: "photo.on.rectangle")
-                    .font(.system(size: 40))
-                    .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4).opacity(0.5))
-                Text("Add Cover Photo")
+            Image(systemName: "photo")
+                .font(.system(size: 40))
+                .foregroundColor(GourneyColors.coral.opacity(0.4))
+        }
+    }
+}
+
+// MARK: - Empty Places View
+
+struct EmptyPlacesView: View {
+    @Binding var showAddPlace: Bool
+    let isReadOnly: Bool
+    
+    var body: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "mappin.circle")
+                .font(.system(size: 60))
+                .foregroundColor(GourneyColors.coral.opacity(0.3))
+            
+            VStack(spacing: 8) {
+                Text("No Places Yet")
+                    .font(.title3)
+                    .fontWeight(.semibold)
+                
+                Text(isReadOnly ? "This list is empty" : "Add your first restaurant to this list")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            
+            if !isReadOnly {
+                Button(action: { showAddPlace = true }) {
+                    Label("Add Place", systemImage: "plus")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .frame(width: 160, height: 44)
+                        .background(GourneyColors.coral)
+                        .clipShape(Capsule())
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 60)
+        .padding(.bottom, 40)
+    }
+}
+
+// MARK: - Add Place Sheet
+
+struct AddPlaceToListSheet: View {
+    let listId: String
+    @ObservedObject var viewModel: ListDetailViewModel
+    @Environment(\.dismiss) var dismiss
+    
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 20) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 60))
+                    .foregroundColor(GourneyColors.coral.opacity(0.3))
+                
+                Text("Search Places")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundColor(.primary)
+                
+                Text("Coming soon")
                     .font(.system(size: 14))
                     .foregroundColor(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .navigationTitle("Add Places")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                        .foregroundColor(GourneyColors.coral)
+                }
             }
         }
     }
 }
 
-// MARK: - Empty State
+// MARK: - Swipe to Delete Row
 
-struct EmptyPlacesView: View {
-    @Binding var showAddPlace: Bool
-    var isReadOnly: Bool = false
+struct SwipeToDeleteRow: View {
+    let item: ListItem
+    let distance: String?
+    let onTap: () -> Void
+    let onDelete: () -> Void
+    
+    @State private var offset: CGFloat = 0
+    @Environment(\.colorScheme) private var colorScheme
+    
+    private let deleteButtonWidth: CGFloat = 80
+    private let deleteThreshold: CGFloat = 60
     
     var body: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "map")
-                .font(.system(size: 60))
-                .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4).opacity(0.3))
-            
-            VStack(spacing: 8) {
-                Text("No Places Yet")
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundColor(.primary)
-                
-                if isReadOnly {
-                    Text("This list doesn't have any places")
-                        .font(.system(size: 14))
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                } else {
-                    Text("Add places from Discover or your visits")
-                        .font(.system(size: 14))
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
+        ZStack(alignment: .trailing) {
+            Button(action: {
+                onDelete()
+            }) {
+                VStack(spacing: 4) {
+                    Image(systemName: "trash.fill")
+                        .font(.system(size: 20, weight: .medium))
+                    Text("Delete")
+                        .font(.system(size: 12, weight: .medium))
                 }
+                .foregroundColor(.white)
+                .frame(width: deleteButtonWidth)
+                .frame(maxHeight: .infinity)
             }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .background(Color.red)
             
-            if !isReadOnly {
-                Button(action: { showAddPlace = true }) {
-                    Label("Add Places", systemImage: "plus")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(.white)
-                        .frame(width: 180, height: 48)
-                        .background(
-                            LinearGradient(
-                                colors: [Color(red: 1.0, green: 0.4, blue: 0.4), Color(red: 0.95, green: 0.3, blue: 0.35)],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                        )
-                        .clipShape(Capsule())
-                        .shadow(color: Color(red: 1.0, green: 0.4, blue: 0.4).opacity(0.3), radius: 8, y: 4)
-                }
-            }
+            PlaceRowView(
+                item: PlaceRowItem(from: item),
+                distance: distance,
+                showRemoveButton: false,
+                onRemove: nil
+            )
+            .background(colorScheme == .dark ? Color(.systemBackground) : Color.white)
+            .offset(x: offset)
+            .gesture(
+                DragGesture()
+                    .onChanged { value in
+                        let translation = value.translation.width
+                        if translation < 0 {
+                            offset = max(translation, -deleteButtonWidth)
+                        } else if offset < 0 {
+                            offset = min(0, offset + translation)
+                        }
+                    }
+                    .onEnded { value in
+                        withAnimation(.spring(response: 0.3)) {
+                            if offset < -deleteThreshold {
+                                offset = -deleteButtonWidth
+                            } else {
+                                offset = 0
+                            }
+                        }
+                    }
+            )
+            .simultaneousGesture(
+                TapGesture()
+                    .onEnded { _ in
+                        if offset < 0 {
+                            withAnimation(.spring(response: 0.3)) {
+                                offset = 0
+                            }
+                        } else {
+                            onTap()
+                        }
+                    }
+            )
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 80)
+        .frame(height: 90)
+        .clipped()
+    }
+}
+
+#Preview {
+    NavigationStack {
+        ListDetailView(
+            list: RestaurantList(
+                id: "preview",
+                title: "My Favorites",
+                description: "Best restaurants",
+                visibility: "public",
+                itemCount: 5,
+                coverPhotoUrl: nil,
+                createdAt: "",
+                likesCount: 10,
+                viewCount: nil
+            ),
+            isReadOnly: false
+        )
     }
 }
 
@@ -674,28 +754,112 @@ class ListDetailViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var likeStatus: (hasLiked: Bool, likesCount: Int)?
     
+    // Like state (moved from View)
+    @Published var isLiked = false
+    @Published var likesCount: Int = 0
+    @Published var likeScale: CGFloat = 1.0
+    
     private let client = SupabaseClient.shared
     private var loadTask: Task<Void, Never>?
+    private var pendingLikeTask: Task<Void, Never>?
     
     deinit {
-        // Cancel any ongoing tasks
         loadTask?.cancel()
-        // Note: Can't directly mutate @Published properties here
+        pendingLikeTask?.cancel()
         print("🧹 [ListDetailVM] Cleaning up")
     }
     
+    // MARK: - Toggle Like (Instagram-style - final state always wins)
+    
+    func toggleLike(listId: String) {
+        // Haptic feedback
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        
+        // Animate scale
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+            likeScale = 1.3
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+                self.likeScale = 1.0
+            }
+        }
+        
+        // Optimistic UI update
+        isLiked.toggle()
+        likesCount += isLiked ? 1 : -1
+        likesCount = max(0, likesCount)
+        
+        // Cancel any pending API call
+        pendingLikeTask?.cancel()
+        
+        // Capture the final desired state AFTER the toggle
+        let finalDesiredState = isLiked
+        
+        // Debounce: wait 300ms before making API call
+        pendingLikeTask = Task {
+            try? await Task.sleep(nanoseconds: 300_000_000) // 300ms
+            
+            guard !Task.isCancelled else { return }
+            
+            await syncLikeWithServer(listId: listId, desiredState: finalDesiredState)
+        }
+    }
+    
+    private func syncLikeWithServer(listId: String, desiredState: Bool) async {
+        // If UI state changed since we scheduled this call, don't proceed
+        guard isLiked == desiredState else { return }
+        
+        do {
+            let body: [String: String] = ["list_id": listId]
+            
+            struct ListLikeToggleResponse: Codable {
+                let listId: String?
+                let liked: Bool
+                let likeCount: Int
+                let createdAt: String?
+            }
+            
+            let response: ListLikeToggleResponse = try await client.post(
+                path: "/functions/v1/lists-like-toggle",
+                body: body,
+                requiresAuth: true
+            )
+            
+            guard !Task.isCancelled else { return }
+            
+            // Check if UI state still matches what we wanted
+            let currentState = isLiked
+            
+            // If server state matches desired state, sync the count
+            if response.liked == desiredState {
+                likesCount = response.likeCount
+                likeStatus = (hasLiked: response.liked, likesCount: response.likeCount)
+            } else if currentState == desiredState {
+                // Server disagrees but UI shows what user wants - call API again to fix
+                print("⚠️ [ListLike] Server mismatch, retrying to sync...")
+                await syncLikeWithServer(listId: listId, desiredState: desiredState)
+                return
+            }
+            
+            print("✅ [ListLike] Synced - liked: \(response.liked), count: \(response.likeCount)")
+            
+        } catch {
+            guard !Task.isCancelled else { return }
+            print("❌ [ListLike] Error: \(error)")
+            // Don't revert - keep UI state as user intended
+        }
+    }
+    
     func loadPlaces(listId: String, completion: ((Bool, Int) -> Void)? = nil) async {
-        // Cancel previous load task
         loadTask?.cancel()
         
         isLoading = true
         errorMessage = nil
         
-        // Create task and AWAIT it
         await withTaskCancellationHandler {
             await Task {
                 do {
-                    // Use proper request format for lists-get-detail
                     let body = ["list_id": listId]
                     let response: ListDetailResponse = try await client.post(
                         path: "/functions/v1/lists-get-detail",
@@ -703,28 +867,28 @@ class ListDetailViewModel: ObservableObject {
                         requiresAuth: true
                     )
                     
-                    // Check if task was cancelled
                     if Task.isCancelled { return }
                     
                     await MainActor.run {
                         places = response.items
                         isLoading = false
                         
-                        // Store like status
+                        // Set like state
+                        isLiked = response.list.hasLiked
+                        likesCount = response.list.likesCount
                         likeStatus = (hasLiked: response.list.hasLiked, likesCount: response.list.likesCount)
                         
-                        // Also call completion for backward compatibility
                         completion?(response.list.hasLiked, response.list.likesCount)
-                        
-                        print("📊 [ListDetail] Stored like status: hasLiked=\(response.list.hasLiked), likesCount=\(response.list.likesCount)")
                     }
                     
-                    print("✅ [ListDetail] Loaded \(response.items.count) places, liked: \(response.list.hasLiked), count: \(response.list.likesCount)")
+                    print("✅ [ListDetail] Loaded \(response.items.count) places")
                 } catch {
                     if !Task.isCancelled {
                         await MainActor.run {
                             errorMessage = error.localizedDescription
                             isLoading = false
+                            isLiked = false
+                            likesCount = 0
                             likeStatus = (hasLiked: false, likesCount: 0)
                             completion?(false, 0)
                         }
@@ -736,12 +900,8 @@ class ListDetailViewModel: ObservableObject {
     }
     
     func removePlace(listId: String, itemId: String, placeId: String, onSuccess: @escaping (Int) -> Void) async {
-        print("🗑️ [RemovePlace] Starting delete - listId: \(listId), itemId: \(itemId), placeId: \(placeId)")
-        
-        // Store original state for rollback if needed
         let originalPlaces = places
         
-        // OPTIMISTIC UPDATE: Remove from UI immediately
         await MainActor.run {
             withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
                 places.removeAll { $0.id == itemId }
@@ -749,14 +909,11 @@ class ListDetailViewModel: ObservableObject {
         }
         
         let newCount = places.count
-        print("⚡ [RemovePlace] Optimistic removal, new count: \(newCount)")
         
-        // Trigger parent refresh with NEW count
         await MainActor.run {
             onSuccess(newCount)
         }
         
-        // Background API call
         do {
             var components = URLComponents(url: URL(string: Config.supabaseURL)!.appendingPathComponent("/functions/v1/lists-remove-item"), resolvingAgainstBaseURL: true)!
             components.queryItems = [
@@ -792,13 +949,11 @@ class ListDetailViewModel: ObservableObject {
         } catch {
             print("❌ [RemovePlace] API failed, rolling back: \(error)")
             
-            // ROLLBACK: Restore original list
             await MainActor.run {
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
                     places = originalPlaces
                 }
                 errorMessage = "Failed to remove item. Please try again."
-                // Trigger parent refresh to restore count
                 onSuccess(originalPlaces.count)
             }
         }
@@ -806,19 +961,16 @@ class ListDetailViewModel: ObservableObject {
     
     func uploadCover(listId: String, image: UIImage) async -> String? {
         do {
-            // Get user ID
             guard let userId = client.getCurrentUserId() else {
                 throw CoverPhotoError.notAuthenticated
             }
             
-            // Upload photo (optimized, memory-efficient)
             let coverUrl = try await ListCoverPhotoUploader.shared.uploadCoverPhoto(
                 image,
                 userId: userId,
                 listId: listId
             )
             
-            // Update list via edge function
             let path = "/functions/v1/lists-update?list_id=\(listId)"
             let body: [String: Any] = ["cover_photo_url": coverUrl]
             
@@ -837,123 +989,5 @@ class ListDetailViewModel: ObservableObject {
             print("❌ [ListDetail] Cover upload error: \(error)")
             return nil
         }
-    }
-}
-
-// MARK: - Add Place Sheet
-
-struct AddPlaceToListSheet: View {
-    let listId: String
-    @ObservedObject var viewModel: ListDetailViewModel
-    @Environment(\.dismiss) var dismiss
-    
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 20) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 60))
-                    .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4).opacity(0.3))
-                
-                Text("Search Places")
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundColor(.primary)
-                
-                Text("Coming soon")
-                    .font(.system(size: 14))
-                    .foregroundColor(.secondary)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .navigationTitle("Add Places")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                        .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
-                }
-            }
-        }
-    }
-}
-
-// MARK: - Swipe to Delete Row
-
-struct SwipeToDeleteRow: View {
-    let item: ListItem
-    let distance: String?
-    let onTap: () -> Void
-    let onDelete: () -> Void
-    
-    @State private var offset: CGFloat = 0
-    @Environment(\.colorScheme) private var colorScheme
-    
-    private let deleteButtonWidth: CGFloat = 80
-    private let deleteThreshold: CGFloat = 60
-    
-    var body: some View {
-        ZStack(alignment: .trailing) {
-            // Delete button background - always visible behind
-            Button(action: {
-                print("🗑️ [Delete] Button tapped")
-                onDelete()
-            }) {
-                VStack(spacing: 4) {
-                    Image(systemName: "trash.fill")
-                        .font(.system(size: 20, weight: .medium))
-                    Text("Delete")
-                        .font(.system(size: 12, weight: .medium))
-                }
-                .foregroundColor(.white)
-                .frame(width: deleteButtonWidth)
-                .frame(maxHeight: .infinity)
-            }
-            .frame(maxWidth: .infinity, alignment: .trailing)
-            .background(Color.red)
-            
-            // Main content - slides over delete button
-            PlaceRowView(
-                item: PlaceRowItem(from: item),
-                distance: distance,
-                showRemoveButton: false,
-                onRemove: nil
-            )
-            .background(colorScheme == .dark ? Color(.systemBackground) : Color.white)
-            .offset(x: offset)
-            .gesture(
-                DragGesture()
-                    .onChanged { value in
-                        let translation = value.translation.width
-                        if translation < 0 {
-                            offset = max(translation, -deleteButtonWidth)
-                        } else if offset < 0 {
-                            offset = min(0, offset + translation)
-                        }
-                    }
-                    .onEnded { value in
-                        withAnimation(.spring(response: 0.3)) {
-                            if offset < -deleteThreshold {
-                                offset = -deleteButtonWidth
-                            } else {
-                                offset = 0
-                            }
-                        }
-                    }
-            )
-            .simultaneousGesture(
-                TapGesture()
-                    .onEnded { _ in
-                        if offset < 0 {
-                            // Close swipe if open
-                            withAnimation(.spring(response: 0.3)) {
-                                offset = 0
-                            }
-                        } else {
-                            // Normal tap
-                            onTap()
-                        }
-                    }
-            )
-        }
-        .frame(height: 90)
-        .clipped()
     }
 }

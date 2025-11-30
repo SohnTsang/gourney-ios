@@ -3,18 +3,11 @@
 //  gourney
 //
 //  ✅ FIXED: No upload progress, no upload overlay, bigger photos, proper blocking
+//  Uses shared VisitFormComponents for DRY
 
 import SwiftUI
 import PhotosUI
 import Combine
-
-struct Design {
-    static let accent = Color(red: 1.0, green: 0.45, blue: 0.45)
-    static let accentGradient = LinearGradient(
-        colors: [Color(red: 1.0, green: 0.45, blue: 0.45), Color(red: 0.95, green: 0.35, blue: 0.4)],
-        startPoint: .topLeading, endPoint: .bottomTrailing
-    )
-}
 
 @MainActor
 class AddVisitViewModel: ObservableObject {
@@ -178,6 +171,24 @@ class AddVisitViewModel: ObservableObject {
         }
         tempFileUrls.removeAll()
         print("🗑️ Cleaned up all temp files")
+    }
+    
+    func clearAllPhotos() {
+        cleanupAllTempFiles()
+        shouldIgnorePhotoChanges = true
+        selectedPhotos = []
+        loadedImages = []
+        uploadedPhotoURLs = []
+        uploadProgress = [:]
+        
+        // Reset flag after clearing
+        Task {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            await MainActor.run {
+                shouldIgnorePhotoChanges = false
+                print("✅ Flag reset after Clear All")
+            }
+        }
     }
     
     func resetForm() {
@@ -539,7 +550,7 @@ struct AddVisitView: View {
                     .background(
                         Group {
                             if viewModel.isValid {
-                                Design.accentGradient
+                                GourneyColors.coralGradient
                             } else {
                                 Color.gray.opacity(0.5)
                             }
@@ -560,153 +571,23 @@ struct AddVisitView: View {
     }
     
     private var photosSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Photos")
-                    .font(.system(size: 15, weight: .semibold))
-                
-                Text("\(viewModel.loadedImages.count)/\(viewModel.maxPhotos)")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(.secondary)
-                
-                Spacer()
-                
-                if !viewModel.loadedImages.isEmpty {
-                    Button {
-                        viewModel.cleanupAllTempFiles()
-                        viewModel.shouldIgnorePhotoChanges = true  // Prevent reload
-                        viewModel.selectedPhotos = []
-                        viewModel.loadedImages = []
-                        viewModel.uploadedPhotoURLs = []
-                        
-                        // ✅ FIX 1: Reset flag after clearing all
-                        Task {
-                            try? await Task.sleep(nanoseconds: 100_000_000)
-                            await MainActor.run {
-                                viewModel.shouldIgnorePhotoChanges = false
-                                print("✅ Flag reset after Clear All")
-                            }
-                        }
-                    } label: {
-                        Text("Clear All")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(Design.accent)
-                    }
-                }
+        VisitPhotosSection(
+            existingPhotoURLs: [],  // AddVisit has no existing photos
+            loadedImages: viewModel.loadedImages.map { (id: $0.id, image: $0.image) },
+            maxPhotos: viewModel.maxPhotos,
+            uploadProgress: viewModel.uploadProgress,
+            selectedPhotos: $viewModel.selectedPhotos,
+            onRemoveExisting: nil,  // No existing photos
+            onRemoveNew: { id in
+                viewModel.removePhoto(withId: id)
+            },
+            onPhotoTap: { index in
+                viewModel.selectedPhotoIndex = index
+            },
+            onClearAll: {
+                viewModel.clearAllPhotos()
             }
-            .padding(.horizontal, 16)
-            
-            if viewModel.loadedImages.isEmpty {
-                PhotosPicker(
-                    selection: $viewModel.selectedPhotos,
-                    maxSelectionCount: viewModel.maxPhotos,
-                    matching: .images
-                ) {
-                    VStack(spacing: 12) {
-                        Image(systemName: "photo.on.rectangle.angled")
-                            .font(.system(size: 40))
-                            .foregroundColor(Design.accent.opacity(0.6))
-                        
-                        Text("Add Photos")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundColor(.primary)
-                        
-                        Text("Up to \(viewModel.maxPhotos) photos")
-                            .font(.system(size: 13))
-                            .foregroundColor(.secondary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 213)  // CHANGED: Match image height
-                    .background(colorScheme == .dark ? Color(white: 0.15) : Color.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                }
-                .padding(.horizontal, 16)
-            } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
-                        ForEach(viewModel.loadedImages, id: \.id) { item in  // CHANGED: Use UUID as id
-                            ZStack(alignment: .topTrailing) {
-                                // ✅ FIX 2: Image with tap gesture
-                                ZStack {
-                                    Image(uiImage: item.image)
-                                        .resizable()
-                                        .scaledToFill()
-                                        .frame(width: 160, height: 213)
-                                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                                    
-                                    // Progress overlay
-                                    if let progress = viewModel.uploadProgress[item.id], progress < 1.0 {
-                                        ZStack {
-                                            Color.black.opacity(0.5)
-                                            
-                                            VStack(spacing: 8) {
-                                                ProgressView(value: progress)
-                                                    .progressViewStyle(LinearProgressViewStyle(tint: .white))
-                                                    .frame(width: 100)
-                                                
-                                                Text("\(Int(progress * 100))%")
-                                                    .font(.system(size: 13, weight: .semibold))
-                                                    .foregroundColor(.white)
-                                            }
-                                        }
-                                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                                    }
-                                }
-                                .contentShape(RoundedRectangle(cornerRadius: 12))
-                                .onTapGesture {
-                                    if viewModel.uploadProgress[item.id] == nil || viewModel.uploadProgress[item.id] == 1.0 {
-                                        if let index = viewModel.loadedImages.firstIndex(where: { $0.id == item.id }) {
-                                            viewModel.selectedPhotoIndex = index
-                                        }
-                                    }
-                                }
-                                
-                                // ✅ Remove button - white stroke only
-                                Button {
-                                    viewModel.removePhoto(withId: item.id)
-                                } label: {
-                                    ZStack {
-                                        // Larger tap target (invisible)
-                                        Circle()
-                                            .fill(.clear)
-                                            .frame(width: 44, height: 44)
-                                        
-                                        // Visual: white stroke X only
-                                        Image(systemName: "xmark")
-                                            .font(.system(size: 13, weight: .bold))
-                                            .foregroundColor(.white)
-                                            .shadow(color: .black.opacity(0.6), radius: 1, x: 0, y: 0)
-                                    }
-                                }
-                                .buttonStyle(.plain)
-                                .zIndex(10)
-                                .disabled(viewModel.uploadProgress[item.id] != nil && viewModel.uploadProgress[item.id] != 1.0)
-                                .opacity((viewModel.uploadProgress[item.id] != nil && viewModel.uploadProgress[item.id] != 1.0) ? 0.3 : 1.0)
-                                .padding(8)
-                            }
-                        }
-                        
-                        if viewModel.loadedImages.count < viewModel.maxPhotos {
-                            PhotosPicker(
-                                selection: $viewModel.selectedPhotos,
-                                maxSelectionCount: viewModel.maxPhotos,
-                                matching: .images
-                            ) {
-                                RoundedRectangle(cornerRadius: 12)
-                                    .strokeBorder(Design.accent.opacity(0.5), style: StrokeStyle(lineWidth: 2, dash: [8, 4]))
-                                    .frame(width: 160, height: 213)  // ✅ BIGGER
-                                    .overlay {
-                                        Image(systemName: "plus")
-                                            .font(.system(size: 32, weight: .medium))  // ✅ BIGGER
-                                            .foregroundColor(Design.accent.opacity(0.7))
-                                    }
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                }
-            }
-        }
+        )
     }
     
     private var placeSection: some View {
@@ -720,7 +601,7 @@ struct AddVisitView: View {
             } label: {
                 HStack(spacing: 12) {
                     Circle()
-                        .fill(viewModel.hasPlace ? Design.accent : Color.gray.opacity(0.3))
+                        .fill(viewModel.hasPlace ? GourneyColors.coral : Color.gray.opacity(0.3))
                         .frame(width: 40, height: 40)
                         .overlay {
                             Image(systemName: "mappin.and.ellipse")
@@ -755,127 +636,15 @@ struct AddVisitView: View {
     }
     
     private var ratingSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Rating")
-                .font(.system(size: 15, weight: .semibold))
-                .padding(.horizontal, 16)
-            
-            HStack(spacing: 16) {
-                ForEach(1...5, id: \.self) { star in
-                    Button {
-                        withAnimation(.spring(response: 0.3)) {
-                            viewModel.rating = star
-                        }
-                    } label: {
-                        Image(systemName: star <= viewModel.rating ? "star.fill" : "star")
-                            .font(.system(size: 28))
-                            .foregroundColor(star <= viewModel.rating ? Design.accent : Design.accent.opacity(0.3))
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity)
-        }
+        VisitRatingSection(rating: $viewModel.rating, allowDeselect: false)
     }
     
     private var commentSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Share your thoughts")
-                .font(.system(size: 15, weight: .semibold))
-                .padding(.horizontal, 16)
-            
-            VStack(alignment: .trailing, spacing: 8) {
-                ZStack(alignment: .topLeading) {
-                    if viewModel.comment.isEmpty {
-                        Text("Share your experience...")
-                            .font(.system(size: 15))
-                            .foregroundColor(.secondary.opacity(0.6))
-                            .padding(.top, 12)
-                            .padding(.leading, 14)
-                    }
-                    
-                    TextEditor(text: $viewModel.comment)
-                        .font(.system(size: 15))
-                        .scrollContentBackground(.hidden)
-                        .frame(minHeight: 120)
-                        .padding(8)
-                        .onChange(of: viewModel.comment) { _, newValue in
-                            if newValue.count > viewModel.maxCommentLength {
-                                viewModel.comment = String(newValue.prefix(viewModel.maxCommentLength))
-                            }
-                        }
-                }
-                .background(colorScheme == .dark ? Color(white: 0.15) : Color.white)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12)
-                        .strokeBorder(
-                            viewModel.comment.isEmpty ? Color.clear : Design.accent.opacity(0.5),
-                            lineWidth: 1.5
-                        )
-                )
-                
-                Text("\(viewModel.comment.count)/\(viewModel.maxCommentLength)")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(viewModel.comment.count >= 900 ? Design.accent : .secondary)
-            }
-            .padding(.horizontal, 16)
-        }
+        VisitCommentSection(comment: $viewModel.comment, maxLength: viewModel.maxCommentLength)
     }
     
     private var visibilitySection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Who can see this?")
-                .font(.system(size: 15, weight: .semibold))
-                .padding(.horizontal, 16)
-            
-            VStack(spacing: 0) {
-                ForEach(VisitVisibility.allCases, id: \.self) { option in
-                    Button {
-                        withAnimation(.spring(response: 0.3)) {
-                            viewModel.visibility = option
-                        }
-                    } label: {
-                        HStack(spacing: 12) {
-                            Circle()
-                                .fill(viewModel.visibility == option ? Design.accent : Color.gray.opacity(0.3))
-                                .frame(width: 40, height: 40)
-                                .overlay {
-                                    Image(systemName: option.icon)
-                                        .font(.system(size: 16, weight: .semibold))
-                                        .foregroundColor(viewModel.visibility == option ? .white : .secondary)
-                                }
-                            
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(option.title)
-                                    .font(.system(size: 15, weight: .semibold))
-                                    .foregroundColor(.primary)
-                                Text(option.description)
-                                    .font(.system(size: 13))
-                                    .foregroundColor(.secondary)
-                            }
-                            
-                            Spacer()
-                            
-                            if viewModel.visibility == option {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .font(.system(size: 22))
-                                    .foregroundColor(Design.accent)
-                            }
-                        }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 12)
-                        .background(viewModel.visibility == option ? Design.accent.opacity(0.06) : Color.clear)
-                    }
-                    
-                    if option != VisitVisibility.allCases.last {
-                        Divider().padding(.leading, 66)
-                    }
-                }
-            }
-            .background(colorScheme == .dark ? Color(white: 0.12) : Color.white)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .padding(.horizontal, 16)
-        }
+        VisitVisibilitySection(visibility: $viewModel.visibility)
     }
     
     private func fullscreenPhotoViewer(index: Int) -> some View {

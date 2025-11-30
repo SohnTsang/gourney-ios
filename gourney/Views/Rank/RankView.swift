@@ -1,5 +1,6 @@
 // Views/Rank/RankView.swift
 // ✅ Production-grade with Instagram-style avatar loading
+// ✅ Fixed: Seamless tab switching with proper loading states
 
 import SwiftUI
 
@@ -20,7 +21,8 @@ struct RankView: View {
                     .padding(.horizontal, 20)
                     .padding(.vertical, 12)
                 
-                if viewModel.isLoading && viewModel.entries.isEmpty {
+                // ✅ Show loading spinner whenever isLoading is true
+                if viewModel.isLoading {
                     Spacer()
                     ProgressView()
                         .tint(Color(red: 1.0, green: 0.4, blue: 0.4))
@@ -43,8 +45,10 @@ struct RankView: View {
                             await viewModel.loadLeaderboard()
                         }
                         
-                        // Always visible rank card
-                        fixedMyRankCard
+                        // Show rank card when we have data
+                        if !viewModel.entries.isEmpty {
+                            fixedMyRankCard
+                        }
                     }
                 }
             }
@@ -65,14 +69,6 @@ struct RankView: View {
         }
         .onAppear { viewModel.onAppear() }
         .onDisappear { viewModel.onDisappear() }
-        .task {
-            if viewModel.entries.isEmpty && !viewModel.isLoading {
-                try? await Task.sleep(nanoseconds: 500_000_000)
-                if viewModel.currentCity != nil || viewModel.homeCity != nil || viewModel.selectedScope == .global {
-                    await viewModel.loadLeaderboard()
-                }
-            }
-        }
     }
     
     // MARK: - Navigation Bar

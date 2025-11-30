@@ -1,6 +1,7 @@
 // Views/Feed/FeedDetailView.swift
 // Full-screen visit detail with comments
 // Uses shared PhotoCarouselView for Instagram-style dynamic height
+// FIX: Added notification listener for seamless visit updates
 
 import SwiftUI
 
@@ -9,6 +10,7 @@ struct FeedDetailView: View {
     @ObservedObject var feedViewModel: FeedViewModel
     
     @StateObject private var viewModel: FeedDetailViewModel
+    @State private var displayItem: FeedItem  // Mutable copy for UI updates
     @State private var currentPhotoIndex = 0
     @State private var showFullscreenPhoto = false
     @State private var showDeleteAlert = false
@@ -17,12 +19,26 @@ struct FeedDetailView: View {
     @State private var lastScrollY: CGFloat = 0
     @FocusState private var isCommentFieldFocused: Bool
     
+    // Visit menu states
+    @State private var showVisitMenu = false
+    @State private var showDeleteVisitAlert = false
+    @State private var showEditVisit = false
+    @State private var isDeletingVisit = false
+    @State private var showPlaceDetail = false
+    @State private var showAddVisitFromPlace = false
+    @State private var pendingAddVisit = false
+    
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
+    
+    private var isOwnVisit: Bool {
+        displayItem.user.id == AuthManager.shared.currentUser?.id
+    }
     
     init(feedItem: FeedItem, feedViewModel: FeedViewModel) {
         self.feedItem = feedItem
         self.feedViewModel = feedViewModel
+        self._displayItem = State(initialValue: feedItem)
         self._viewModel = StateObject(wrappedValue: FeedDetailViewModel(visitId: feedItem.id))
     }
     
@@ -38,9 +54,9 @@ struct FeedDetailView: View {
                 ScrollView {
                     VStack(spacing: 0) {
                         // Photo carousel
-                        if !feedItem.photos.isEmpty {
+                        if !displayItem.photos.isEmpty {
                             PhotoCarouselView(
-                                photos: feedItem.photos,
+                                photos: displayItem.photos,
                                 currentIndex: $currentPhotoIndex,
                                 onPhotoTap: {
                                     showFullscreenPhoto = true
@@ -85,8 +101,15 @@ struct FeedDetailView: View {
             
             // Fixed header overlay
             if showHeader {
-                customHeaderBar
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                DetailTopBar(
+                    title: "Visit",
+                    rightButtonIcon: isOwnVisit ? "ellipsis" : nil,
+                    showRightButton: isOwnVisit,
+                    usePrimaryColor: true,
+                    onBack: { dismiss() },
+                    onRightAction: { showVisitMenu = true }
+                )
+                .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
         .background(colorScheme == .dark ? Color.black : Color.white)
@@ -94,31 +117,149 @@ struct FeedDetailView: View {
         .onAppear {
             viewModel.loadComments()
             viewModel.onCommentCountChanged = { delta in
-                feedViewModel.updateCommentCount(for: feedItem.id, delta: delta)
+                feedViewModel.updateCommentCount(for: displayItem.id, delta: delta)
             }
         }
         .onDisappear {
             viewModel.cleanup()
         }
+        // Listen for visit updates from notification
+        .onReceive(NotificationCenter.default.publisher(for: .visitDidUpdate)) { notification in
+            handleVisitUpdate(notification)
+        }
         .fullScreenCover(isPresented: $showFullscreenPhoto) {
             FullscreenPhotoViewer(
-                photos: feedItem.photos,
+                photos: displayItem.photos,
                 currentIndex: $currentPhotoIndex
             )
         }
-        .alert("Delete Comment", isPresented: $showDeleteAlert) {
-            Button("Cancel", role: .cancel) {
-                commentToDelete = nil
+        .navigationDestination(isPresented: $showEditVisit) {
+            EditVisitView(feedItem: displayItem) { updatedItem in
+                // Update local display
+                displayItem = updatedItem
+                // Update in feed list
+                feedViewModel.updateItem(updatedItem)
+                // Note: ProfileView update now handled via NotificationCenter
             }
-            Button("Delete", role: .destructive) {
+        }
+        .sheet(isPresented: $showVisitMenu) {
+            VisitActionSheet(
+                onEdit: {
+                    showEditVisit = true
+                },
+                onDelete: {
+                    showDeleteVisitAlert = true
+                }
+            )
+        }
+        .sheet(isPresented: $showPlaceDetail) {
+            PlaceDetailSheet(
+                placeId: displayItem.place.id,
+                displayName: displayItem.place.displayName,
+                lat: 0, // Will be fetched by PlaceDetailSheet
+                lng: 0,
+                formattedAddress: nil,
+                phoneNumber: nil,
+                website: nil,
+                photoUrls: nil,
+                googlePlaceId: nil,
+                primaryButtonTitle: "Add Visit",
+                primaryButtonAction: {
+                    // Set flag and dismiss sheet
+                    pendingAddVisit = true
+                    showPlaceDetail = false
+                },
+                onDismiss: {
+                    showPlaceDetail = false
+                }
+            )
+            .presentationDetents([.large])
+            .presentationDragIndicator(.hidden)
+        }
+        .onChange(of: showPlaceDetail) { _, newValue in
+            // When sheet dismisses and we have pending AddVisit
+            if !newValue && pendingAddVisit {
+                pendingAddVisit = false
+                showAddVisitFromPlace = true
+            }
+        }
+        .fullScreenCover(isPresented: $showAddVisitFromPlace) {
+            AddVisitView(
+                prefilledPlace: PlaceSearchResult(
+                    source: .google,
+                    googlePlaceId: nil,
+                    applePlaceId: nil,
+                    nameEn: displayItem.place.nameEn,
+                    nameJa: displayItem.place.nameJa,
+                    nameZh: displayItem.place.nameZh,
+                    lat: 0,
+                    lng: 0,
+                    formattedAddress: nil,
+                    categories: displayItem.place.categories,
+                    photoUrls: nil,
+                    existsInDb: true,
+                    dbPlaceId: displayItem.place.id,
+                    appleFullData: nil
+                ),
+                showBackButton: true,
+                onVisitPosted: { _ in
+                    showAddVisitFromPlace = false
+                }
+            )
+        }
+        .customDeleteAlert(
+            isPresented: $showDeleteVisitAlert,
+            title: "Delete Visit",
+            message: "Are you sure you want to delete this visit? This cannot be undone.",
+            confirmTitle: "Delete",
+            onConfirm: {
+                deleteVisit()
+            }
+        )
+        .customDeleteAlert(
+            isPresented: $showDeleteAlert,
+            title: "Delete Comment",
+            message: "Are you sure you want to delete this comment? This cannot be undone.",
+            confirmTitle: "Delete",
+            onConfirm: {
                 if let comment = commentToDelete {
                     viewModel.deleteComment(comment)
                 }
                 commentToDelete = nil
             }
-        } message: {
-            Text("Are you sure you want to delete this comment? This cannot be undone.")
+        )
+        .loadingOverlay(isShowing: isDeletingVisit, message: "Deleting...")
+    }
+    
+    // MARK: - Handle Visit Update Notification
+    
+    private func handleVisitUpdate(_ notification: Notification) {
+        guard let visitId = notification.userInfo?[VisitNotificationKeys.visitId] as? String,
+              visitId == displayItem.id,
+              let updatedData = notification.userInfo?[VisitNotificationKeys.updatedVisit] as? VisitUpdateData else {
+            return
         }
+        
+        print("📥 [FeedDetailView] Received update for current visit: \(visitId)")
+        
+        // Update displayItem with the new data, preserving user/place/engagement data
+        displayItem = FeedItem(
+            id: updatedData.id,
+            rating: updatedData.rating,
+            comment: updatedData.comment,
+            photoUrls: updatedData.photoUrls,
+            visibility: updatedData.visibility,
+            createdAt: updatedData.createdAt,
+            visitedAt: updatedData.visitedAt,
+            likeCount: displayItem.likeCount,
+            commentCount: displayItem.commentCount,
+            isLiked: displayItem.isLiked,
+            isFollowing: displayItem.isFollowing,
+            user: displayItem.user,
+            place: displayItem.place
+        )
+        
+        print("✅ [FeedDetailView] Updated displayItem")
     }
     
     // MARK: - Scroll Handling
@@ -141,34 +282,44 @@ struct FeedDetailView: View {
         }
     }
     
-    // MARK: - Custom Header Bar
+    // MARK: - Delete Visit
     
-    private var customHeaderBar: some View {
-        HStack {
-            Button {
+    private func deleteVisit() {
+        isDeletingVisit = true
+        
+        Task { @MainActor in
+            do {
+                let path = "/functions/v1/visits-delete?visit_id=\(displayItem.id)"
+                print("🗑️ [Visit] Deleting: \(displayItem.id)")
+                
+                let _: EmptyResponse = try await SupabaseClient.shared.delete(
+                    path: path,
+                    requiresAuth: true
+                )
+                
+                print("✅ [Visit] Deleted successfully")
+                
+                // Broadcast delete notification to all listening views
+                VisitUpdateService.shared.notifyVisitDeleted(visitId: displayItem.id)
+                
+                // Remove from feed
+                feedViewModel.removeVisit(id: displayItem.id)
+                
+                // Success haptic
+                let generator = UINotificationFeedbackGenerator()
+                generator.notificationOccurred(.success)
+                
+                // Dismiss view
                 dismiss()
-            } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundColor(.primary)
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
+                
+            } catch {
+                print("❌ [Visit] Delete error: \(error)")
+                isDeletingVisit = false
+                
+                let generator = UINotificationFeedbackGenerator()
+                generator.notificationOccurred(.error)
             }
-            
-            Spacer()
-            
-            Text("Visit")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundColor(.primary)
-            
-            Spacer()
-            
-            Color.clear
-                .frame(width: 44, height: 44)
         }
-        .padding(.horizontal, 8)
-        .frame(height: 44)
-        .background(colorScheme == .dark ? Color.black : Color.white)
     }
     
     // MARK: - Visit Content
@@ -177,14 +328,14 @@ struct FeedDetailView: View {
         VStack(alignment: .leading, spacing: 12) {
             // User header
             HStack(spacing: 10) {
-                AvatarView(url: feedItem.user.avatarUrl, size: 40)
+                AvatarView(url: displayItem.user.avatarUrl, size: 40)
                 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(feedItem.user.displayNameOrHandle)
+                    Text(displayItem.user.displayNameOrHandle)
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundColor(.primary)
                     
-                    Text(timeAgoString(from: feedItem.createdAt))
+                    Text(timeAgoString(from: displayItem.createdAt))
                         .font(.system(size: 12))
                         .foregroundColor(.secondary)
                 }
@@ -192,28 +343,46 @@ struct FeedDetailView: View {
                 Spacer()
             }
             
-            // Place info
-            VStack(alignment: .leading, spacing: 4) {
-                Text(feedItem.place.displayName)
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundColor(.primary)
-                
-                HStack(spacing: 8) {
-                    if let rating = feedItem.rating {
-                        RatingStarsView(rating: rating, size: 14)
+            // Place info - tappable
+            Button {
+                showPlaceDetail = true
+            } label: {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(displayItem.place.displayName)
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundColor(.primary)
+                        
+                        HStack(spacing: 8) {
+                            // Rating number + stars
+                            HStack(spacing: 4) {
+                                Text(String(format: "%.1f", Double(displayItem.rating ?? 0)))
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundColor(.primary)
+                                
+                                RatingStarsView(rating: displayItem.rating ?? 0, size: 14)
+                            }
+                            
+                            if !displayItem.place.locationString.isEmpty {
+                                Text(displayItem.place.locationString)
+                                    .font(.system(size: 13))
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
                     }
                     
-                    if !feedItem.place.locationString.isEmpty {
-                        Text(feedItem.place.locationString)
-                            .font(.system(size: 13))
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-                    }
+                    Spacer()
+                    
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.secondary.opacity(0.5))
                 }
             }
+            .buttonStyle(.plain)
             
             // Comment text
-            if let comment = feedItem.comment, !comment.isEmpty {
+            if let comment = displayItem.comment, !comment.isEmpty {
                 Text(comment)
                     .font(.system(size: 15))
                     .foregroundColor(.primary)
@@ -266,15 +435,15 @@ struct FeedDetailView: View {
     }
     
     private var currentIsLiked: Bool {
-        feedViewModel.items.first(where: { $0.id == feedItem.id })?.isLiked ?? feedItem.isLiked
+        feedViewModel.items.first(where: { $0.id == displayItem.id })?.isLiked ?? displayItem.isLiked
     }
     
     private var currentLikeCount: Int {
-        feedViewModel.items.first(where: { $0.id == feedItem.id })?.likeCount ?? feedItem.likeCount
+        feedViewModel.items.first(where: { $0.id == displayItem.id })?.likeCount ?? displayItem.likeCount
     }
     
     private var currentCommentCount: Int {
-        feedViewModel.items.first(where: { $0.id == feedItem.id })?.commentCount ?? feedItem.commentCount
+        feedViewModel.items.first(where: { $0.id == displayItem.id })?.commentCount ?? displayItem.commentCount
     }
     
     // MARK: - Comments Section
@@ -424,8 +593,8 @@ struct FeedDetailView: View {
     }
     
     private func shareVisit() {
-        let text = "\(feedItem.user.displayNameOrHandle) visited \(feedItem.place.displayName)"
-        let url = URL(string: "https://gourney.app/visit/\(feedItem.id)")
+        let text = "\(displayItem.user.displayNameOrHandle) visited \(displayItem.place.displayName)"
+        let url = URL(string: "https://gourney.app/visit/\(displayItem.id)")
         
         var items: [Any] = [text]
         if let url = url { items.append(url) }
@@ -707,6 +876,69 @@ struct FullscreenPhotoViewer: View {
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
         }
+    }
+}
+
+// MARK: - Visit Action Sheet (Same design as FeedMenuSheet)
+
+struct VisitActionSheet: View {
+    let onEdit: () -> Void
+    let onDelete: () -> Void
+    
+    @Environment(\.dismiss) private var dismiss
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            Capsule()
+                .fill(Color(.systemGray3))
+                .frame(width: 36, height: 5)
+                .padding(.top, 8)
+                .padding(.bottom, 20)
+            
+            VStack(spacing: 0) {
+                menuRow(icon: "pencil.circle", title: "Edit Visit") {
+                    dismiss()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { onEdit() }
+                }
+                
+                Divider().padding(.leading, 56)
+                
+                menuRow(icon: "trash.circle", title: "Delete Visit", isDestructive: true) {
+                    dismiss()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { onDelete() }
+                }
+            }
+            
+            Spacer()
+        }
+        .presentationDetents([.height(180)])
+        .presentationDragIndicator(.hidden)
+        .presentationCornerRadius(20)
+    }
+    
+    private func menuRow(icon: String, title: String, isDestructive: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                Image(systemName: icon)
+                    .font(.system(size: 26))
+                    .foregroundColor(isDestructive ? .red : .primary)
+                    .frame(width: 32)
+                
+                Text(title)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundColor(isDestructive ? .red : .primary)
+                
+                Spacer()
+                
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(Color(.systemGray3))
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 

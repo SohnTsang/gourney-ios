@@ -1,7 +1,8 @@
 // Views/Profile/ProfileView.swift
 // User profile with visits grid and mini-map
 // Production-ready with memory optimization
-// FIX: Bio centered/truncated, consistent stat font sizes
+// FIX: Changed onDisappear to cleanup() instead of reset() for seamless updates
+// FIX: Removed VisitRefreshTrigger - now using NotificationCenter
 
 import SwiftUI
 import MapKit
@@ -74,11 +75,12 @@ struct ProfileView: View {
                     EmptyView()
                 }
             }
-        }
-        .sheet(isPresented: $showListsView) {
-            ListsView()
+            .navigationDestination(isPresented: $showListsView) {
+                ListsView()
+            }
         }
         .onAppear {
+            // Load profile normally - notifications handle updates
             if let handle = userHandle {
                 viewModel.loadProfile(handle: handle)
             } else if let id = userId {
@@ -104,8 +106,10 @@ struct ProfileView: View {
             }
         }
         .onDisappear {
-            // Clear visits when leaving to prevent flash on return
-            viewModel.reset()
+            // Only cleanup for memory management, don't reset data
+            // This preserves data when navigating to detail views
+            // Visit updates are handled via NotificationCenter
+            viewModel.cleanup()
         }
     }
     

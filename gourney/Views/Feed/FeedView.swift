@@ -11,8 +11,9 @@ struct FeedView: View {
     @State private var selectedItem: FeedItem?
     @State private var showUserProfile = false
     @State private var selectedUserId: String?
-    @State private var showPlaceDetail = false
-    @State private var selectedPlaceId: String?
+    @State private var selectedPlaceItem: FeedItem?
+    @State private var showAddVisitFromPlace = false
+    @State private var placeForAddVisit: FeedItem?
     @State private var showMenuForId: String?
     @State private var navigateToDetail: FeedItem?
     
@@ -73,8 +74,7 @@ struct FeedView: View {
                         showUserProfile = true
                     },
                     onViewPlace: {
-                        selectedPlaceId = item.place.id
-                        showPlaceDetail = true
+                        selectedPlaceItem = item
                     },
                     onSaveToList: {
                         selectedItem = item
@@ -87,6 +87,70 @@ struct FeedView: View {
         .sheet(isPresented: $showSaveToList) {
             if let item = selectedItem {
                 SaveToListSheet(placeId: item.place.id, placeName: item.place.displayName)
+            }
+        }
+        .sheet(item: $selectedPlaceItem) { item in
+            PlaceDetailSheet(
+                placeId: item.place.id,
+                displayName: item.place.displayName,
+                lat: 0, // Will be fetched by PlaceDetailSheet
+                lng: 0,
+                formattedAddress: nil,
+                phoneNumber: nil,
+                website: nil,
+                photoUrls: nil,
+                googlePlaceId: nil,
+                primaryButtonTitle: "Add Visit",
+                primaryButtonAction: {
+                    // Store the item for AddVisit, then dismiss sheet
+                    placeForAddVisit = item
+                    selectedPlaceItem = nil
+                },
+                onDismiss: {
+                    selectedPlaceItem = nil
+                }
+            )
+            .presentationDetents([.large])
+            .presentationDragIndicator(.hidden)
+        }
+        .onChange(of: selectedPlaceItem) { oldValue, newValue in
+            // When sheet dismisses and we have a place queued for AddVisit
+            if newValue == nil && placeForAddVisit != nil {
+                showAddVisitFromPlace = true
+            }
+        }
+        .fullScreenCover(isPresented: $showAddVisitFromPlace) {
+            if let item = placeForAddVisit {
+                AddVisitView(
+                    prefilledPlace: PlaceSearchResult(
+                        source: .google,
+                        googlePlaceId: nil,
+                        applePlaceId: nil,
+                        nameEn: item.place.nameEn,
+                        nameJa: item.place.nameJa,
+                        nameZh: item.place.nameZh,
+                        lat: 0,
+                        lng: 0,
+                        formattedAddress: nil,
+                        categories: item.place.categories,
+                        photoUrls: nil,
+                        existsInDb: true,
+                        dbPlaceId: item.place.id,
+                        appleFullData: nil
+                    ),
+                    showBackButton: true,
+                    onVisitPosted: { _ in
+                        showAddVisitFromPlace = false
+                        placeForAddVisit = nil
+                        Task { await viewModel.refresh() }
+                    }
+                )
+            }
+        }
+        .onChange(of: showAddVisitFromPlace) { _, newValue in
+            // Clear stored place when AddVisit is dismissed
+            if !newValue {
+                placeForAddVisit = nil
             }
         }
     }
@@ -170,8 +234,7 @@ struct FeedView: View {
                             showUserProfile = true
                         },
                         onPlaceTap: {
-                            selectedPlaceId = item.place.id
-                            showPlaceDetail = true
+                            selectedPlaceItem = item
                         },
                         showMenuForId: $showMenuForId
                     )

@@ -1,5 +1,6 @@
 // ViewModels/RankViewModel.swift
 // ✅ Production-grade with Instagram-style memory management
+// ✅ Fixed: Seamless tab switching - cancelled tasks don't reset loading state
 
 import Foundation
 import SwiftUI
@@ -125,6 +126,9 @@ class RankViewModel: ObservableObject {
     private var hasGeocodedOnce = false
     private var loadTask: Task<Void, Never>?
     
+    // ✅ FIX: Track which task "owns" the loading state to prevent race conditions
+    private var currentLoadId: UUID?
+    
     init() {
         setupLocationTracking()
     }
@@ -138,9 +142,14 @@ class RankViewModel: ObservableObject {
     // MARK: - Lifecycle (Instagram pattern)
     
     func onAppear() {
-        print("📱 [Rank] View appeared")
+        print("📱 [Rank] View appeared - entries: \(entries.count), isLoading: \(isLoading)")
+        // Reload if entries empty and not already loading
         if entries.isEmpty && !isLoading {
-            loadTask = Task { await loadLeaderboard() }
+            errorMessage = nil
+            isLoading = true
+            let loadId = UUID()
+            currentLoadId = loadId
+            loadTask = Task { await loadLeaderboard(loadId: loadId) }
         }
     }
     
@@ -152,11 +161,20 @@ class RankViewModel: ObservableObject {
     
     func clearAndReload() {
         loadTask?.cancel()
+        
+        // Set loading state and generate new load ID
+        isLoading = true
+        errorMessage = nil
+        let loadId = UUID()
+        currentLoadId = loadId
+        
         entries.removeAll(keepingCapacity: false)
         userRank = nil
         cursor = nil
         hasMore = true
-        loadTask = Task { await loadLeaderboard() }
+        
+        loadTask = Task { await loadLeaderboard(loadId: loadId) }
+        print("🔄 [Rank] Clear and reload triggered - loadId: \(loadId.uuidString.prefix(8))")
     }
     
     // MARK: - Location
@@ -217,7 +235,10 @@ class RankViewModel: ObservableObject {
                 }
                 
                 if entries.isEmpty && !isLoading {
-                    loadTask = Task { await loadLeaderboard() }
+                    isLoading = true
+                    let loadId = UUID()
+                    currentLoadId = loadId
+                    loadTask = Task { await loadLeaderboard(loadId: loadId) }
                 }
                 
                 print("📍 [Rank] Geocoded: \(self.currentCity ?? "nil"), \(self.currentCountry ?? "nil")")
@@ -278,7 +299,20 @@ class RankViewModel: ObservableObject {
     
     // MARK: - Data Loading
     
-    func loadLeaderboard(loadMore: Bool = false) async {
+    func loadLeaderboard(loadMore: Bool = false, loadId: UUID? = nil) async {
+        // ✅ FIX: Use loadId to track ownership of loading state
+        // If no loadId provided (e.g., from pull-to-refresh), generate one
+        let thisLoadId = loadId ?? UUID()
+        if loadId == nil {
+            currentLoadId = thisLoadId
+        }
+        
+        // Check for cancellation early
+        guard !Task.isCancelled else {
+            print("⚡ [Rank] Load skipped - task already cancelled")
+            return
+        }
+        
         if loadMore {
             guard hasMore && !isLoadingMore && entries.count < maxEntries else { return }
             isLoadingMore = true
@@ -286,32 +320,51 @@ class RankViewModel: ObservableObject {
             isLoading = true
             cursor = nil
             hasMore = true
+            errorMessage = nil
         }
         
-        errorMessage = nil
-        
         do {
+            // Check cancellation before network call
+            try Task.checkCancellation()
+            
             let response: LeaderboardResponse
             
             switch selectedScope {
             case .home:
                 guard let city = homeCity else {
-                    errorMessage = "Please set your home city"
-                    isLoading = false
+                    // ✅ Only update state if we still own the loading
+                    if currentLoadId == thisLoadId {
+                        errorMessage = "Please set your home city"
+                        isLoading = false
+                    }
                     return
                 }
                 response = try await loadCityLeaderboard(city: city, type: "home", loadMore: loadMore)
                 
             case .current:
                 guard let city = currentCity else {
-                    errorMessage = "Unable to determine current location"
-                    isLoading = false
+                    if currentLoadId == thisLoadId {
+                        errorMessage = "Unable to determine current location"
+                        isLoading = false
+                    }
                     return
                 }
                 response = try await loadCityLeaderboard(city: city, type: "current", loadMore: loadMore)
                 
             case .global:
                 response = try await loadGlobalLeaderboard(loadMore: loadMore)
+            }
+            
+            // ✅ FIX: Check if we still own the loading state before updating
+            guard currentLoadId == thisLoadId else {
+                print("⚡ [Rank] Load completed but ownership changed - discarding results")
+                return
+            }
+            
+            // Check cancellation after network call
+            guard !Task.isCancelled else {
+                print("⚡ [Rank] Load cancelled after network - not updating UI")
+                return
             }
             
             if loadMore {
@@ -347,11 +400,35 @@ class RankViewModel: ObservableObject {
             
             print("✅ [Rank] Loaded \(entries.count) entries for \(selectedScope)")
             
+        } catch is CancellationError {
+            // ✅ FIX: Only reset loading state if we still own it
+            if currentLoadId == thisLoadId {
+                isLoading = false
+                isLoadingMore = false
+            }
+            print("⚡ [Rank] Load cancelled (CancellationError) - ownership: \(currentLoadId == thisLoadId)")
+            
         } catch {
-            errorMessage = error.localizedDescription
-            isLoading = false
-            isLoadingMore = false
-            print("❌ [Rank] Load error: \(error)")
+            // Check if this is a URL cancellation error
+            if let urlError = error as? URLError, urlError.code == .cancelled {
+                // ✅ FIX: Only reset loading state if we still own it
+                if currentLoadId == thisLoadId {
+                    isLoading = false
+                    isLoadingMore = false
+                }
+                print("⚡ [Rank] Load cancelled (URLError) - ownership: \(currentLoadId == thisLoadId)")
+                return
+            }
+            
+            // ✅ FIX: Only show error if we still own the loading state
+            if currentLoadId == thisLoadId {
+                errorMessage = error.localizedDescription
+                isLoading = false
+                isLoadingMore = false
+                print("❌ [Rank] Load error: \(error)")
+            } else {
+                print("⚡ [Rank] Error occurred but ownership changed - ignoring")
+            }
         }
     }
     

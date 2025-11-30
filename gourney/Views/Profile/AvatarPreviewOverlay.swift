@@ -1,6 +1,7 @@
 // Views/Shared/AvatarPreviewOverlay.swift
 // Full screen avatar preview with blur background
 // Instagram-style: opens FROM avatar position, closes back TO avatar position
+// FIX: Show loading indicator instead of placeholder during image load
 
 import SwiftUI
 
@@ -52,12 +53,14 @@ struct AvatarPreviewOverlay: View {
     @ViewBuilder
     private func avatarImage(size: CGFloat) -> some View {
         if let uiImage = image {
+            // Local UIImage - show directly
             Image(uiImage: uiImage)
                 .resizable()
                 .scaledToFill()
                 .frame(width: size, height: size)
                 .clipShape(Circle())
         } else if let urlString = imageUrl, let url = URL(string: urlString) {
+            // Remote URL - show loading indicator while loading, NOT placeholder
             AsyncImage(url: url) { phase in
                 switch phase {
                 case .success(let img):
@@ -66,13 +69,27 @@ struct AvatarPreviewOverlay: View {
                         .scaledToFill()
                         .frame(width: size, height: size)
                         .clipShape(Circle())
-                case .failure, .empty:
+                case .failure:
+                    // Only show placeholder on actual failure
                     placeholder(size: size)
+                case .empty:
+                    // Loading state - subtle gray circle with spinner
+                    Circle()
+                        .fill(Color(.systemGray4))
+                        .frame(width: size, height: size)
+                        .overlay(
+                            ProgressView()
+                                .tint(.white)
+                                .scaleEffect(size > 100 ? 1.5 : 1.0)
+                        )
                 @unknown default:
-                    placeholder(size: size)
+                    Circle()
+                        .fill(Color(.systemGray4))
+                        .frame(width: size, height: size)
                 }
             }
         } else {
+            // No image at all - show placeholder (this case shouldn't happen if we check before showing)
             placeholder(size: size)
         }
     }

@@ -1,7 +1,7 @@
 // ViewModels/ProfileViewModel.swift
 // Profile data management with visits, follow toggle, and map data
 // Production-ready with memory optimization
-// FIX: Always fetch from user-profile edge function for accurate counts
+// FIX: Added notification listeners for seamless visit updates
 
 import Foundation
 import SwiftUI
@@ -35,9 +35,13 @@ class ProfileViewModel: ObservableObject {
     private var handle: String?
     private var userId: String?
     private var visitsCursor: VisitsCursor?
-    private var fetchTask: Task<Void, Never>?
-    private var visitsTask: Task<Void, Never>?
+    private var currentProfileTask: Task<Void, Never>?
+    private var currentVisitsTask: Task<Void, Never>?
+    private var paginationTask: Task<Void, Never>?
     private let pageSize = 20
+    
+    // Notification subscriptions
+    private var cancellables = Set<AnyCancellable>()
     
     // MARK: - Computed Properties
     
@@ -59,11 +63,114 @@ class ProfileViewModel: ObservableObject {
     
     // MARK: - Initialization
     
-    init() {}
+    init() {
+        setupNotificationListeners()
+    }
     
     deinit {
-        fetchTask?.cancel()
-        visitsTask?.cancel()
+        currentProfileTask?.cancel()
+        currentVisitsTask?.cancel()
+        paginationTask?.cancel()
+        cancellables.removeAll()
+    }
+    
+    // MARK: - Notification Listeners
+    
+    private func setupNotificationListeners() {
+        // Listen for visit updates
+        NotificationCenter.default.publisher(for: .visitDidUpdate)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] notification in
+                self?.handleVisitUpdate(notification)
+            }
+            .store(in: &cancellables)
+        
+        // Listen for visit deletes
+        NotificationCenter.default.publisher(for: .visitDidDelete)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] notification in
+                self?.handleVisitDelete(notification)
+            }
+            .store(in: &cancellables)
+        
+        // Listen for visit creates
+        NotificationCenter.default.publisher(for: .visitDidCreate)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                // Refresh visits on create
+                self?.refreshVisitsOnly()
+            }
+            .store(in: &cancellables)
+    }
+    
+    private func handleVisitUpdate(_ notification: Notification) {
+        guard let visitId = notification.userInfo?[VisitNotificationKeys.visitId] as? String,
+              let updatedData = notification.userInfo?[VisitNotificationKeys.updatedVisit] as? VisitUpdateData else {
+            print("⚠️ [ProfileVM] Received notification but missing data")
+            return
+        }
+        
+        print("📥 [ProfileVM] Received update notification for visit: \(visitId)")
+        print("   📊 Current visits count: \(visits.count)")
+        
+        // Only update if this visit is in our list
+        guard let index = visits.firstIndex(where: { $0.id == visitId }) else {
+            print("📭 [ProfileVM] Visit \(visitId) not in current list, skipping")
+            return
+        }
+        
+        print("📥 [ProfileVM] Updating visit at index \(index): \(visitId)")
+        
+        // Create updated ProfileVisit preserving place data if not returned
+        let existingVisit = visits[index]
+        let updatedVisit = ProfileVisit(
+            id: updatedData.id,
+            rating: updatedData.rating,
+            comment: updatedData.comment,
+            photoUrls: updatedData.photoUrls,
+            visibility: updatedData.visibility,
+            visitedAt: updatedData.visitedAt,
+            createdAt: updatedData.createdAt,
+            place: updatedData.place.map { p in
+                ProfilePlace(
+                    id: p.id,
+                    nameEn: p.nameEn,
+                    nameJa: p.nameJa,
+                    nameZh: nil,
+                    city: p.city,
+                    ward: p.ward,
+                    categories: p.categories,
+                    lat: p.lat,
+                    lng: p.lng
+                )
+            } ?? existingVisit.place
+        )
+        
+        visits[index] = updatedVisit
+        print("✅ [ProfileVM] Visit updated - new photoUrls: \(updatedVisit.photoUrls ?? [])")
+    }
+    
+    private func handleVisitDelete(_ notification: Notification) {
+        guard let visitId = notification.userInfo?[VisitNotificationKeys.visitId] as? String else {
+            return
+        }
+        
+        if let index = visits.firstIndex(where: { $0.id == visitId }) {
+            visits.remove(at: index)
+            print("🗑️ [ProfileVM] Removed visit: \(visitId)")
+            
+            // Update visit count
+            if var currentProfile = profile {
+                currentProfile.visitCount = max(0, currentProfile.visitCount - 1)
+                profile = currentProfile
+            }
+        }
+    }
+    
+    private func refreshVisitsOnly() {
+        Task {
+            await loadVisitsInternal(refresh: true)
+        }
     }
     
     // MARK: - Load Profile
@@ -72,13 +179,16 @@ class ProfileViewModel: ObservableObject {
         self.handle = handle
         self.userId = userId
         
-        fetchTask?.cancel()
-        fetchTask = Task { [weak self] in
+        // Cancel any existing profile task
+        currentProfileTask?.cancel()
+        currentVisitsTask?.cancel()
+        
+        currentProfileTask = Task { [weak self] in
             await self?.performLoadProfile()
         }
     }
     
-    /// FIX: For own profile, always fetch from edge function to get accurate counts
+    /// For own profile - always fetch from edge function for accurate data
     func loadOwnProfile() {
         guard let user = AuthManager.shared.currentUser else {
             print("❌ [Profile] No current user found")
@@ -86,12 +196,13 @@ class ProfileViewModel: ObservableObject {
         }
         
         print("👤 [Profile] Loading own profile for @\(user.handle)")
-        
-        // Set the handle and fetch from edge function for accurate data
         self.handle = user.handle
         
-        fetchTask?.cancel()
-        fetchTask = Task { [weak self] in
+        // Cancel any existing tasks
+        currentProfileTask?.cancel()
+        currentVisitsTask?.cancel()
+        
+        currentProfileTask = Task { [weak self] in
             await self?.performLoadProfile()
         }
     }
@@ -102,7 +213,10 @@ class ProfileViewModel: ObservableObject {
             return
         }
         
-        isLoading = true
+        // Only show loading if we don't have data yet
+        if profile == nil {
+            isLoading = true
+        }
         error = nil
         
         do {
@@ -114,7 +228,9 @@ class ProfileViewModel: ObservableObject {
                 requiresAuth: true
             )
             
-            // Log all the data we received
+            // Check if task was cancelled
+            if Task.isCancelled { return }
+            
             print("✅ [Profile] Loaded: @\(handle)")
             print("   📊 Points: \(response.points ?? 0)")
             print("   📋 Lists: \(response.listCount)")
@@ -125,22 +241,23 @@ class ProfileViewModel: ObservableObject {
             
             profile = response.toUserProfile()
             isFollowing = response.isFollowing
+            isLoading = false
             
-            // Load visits after profile
-            await loadVisits(refresh: true)
+            // Load visits after profile (don't cancel if profile task continues)
+            await loadVisitsInternal(refresh: true)
             
         } catch {
+            if Task.isCancelled { return }
             print("❌ [Profile] Error: \(error)")
             self.error = "Failed to load profile"
+            isLoading = false
         }
-        
-        isLoading = false
     }
     
     // MARK: - Load Visits
     
-    func loadVisits(refresh: Bool = false) async {
-        guard let handle = handle ?? AuthManager.shared.currentUser?.handle else {
+    private func loadVisitsInternal(refresh: Bool) async {
+        guard let handle = handle else {
             print("❌ [Visits] No handle available")
             return
         }
@@ -148,12 +265,15 @@ class ProfileViewModel: ObservableObject {
         if refresh {
             visitsCursor = nil
             hasMoreVisits = true
-            visits = []
+            // Keep existing visits visible during refresh (Instagram pattern)
         }
         
         guard hasMoreVisits else { return }
         
-        isLoadingVisits = true
+        // Only show loading indicator if no visits yet
+        if visits.isEmpty {
+            isLoadingVisits = true
+        }
         
         do {
             var path = "/functions/v1/visits-history?handle=\(handle)&limit=\(pageSize)"
@@ -168,12 +288,17 @@ class ProfileViewModel: ObservableObject {
                 requiresAuth: true
             )
             
+            // Check if task was cancelled
+            if Task.isCancelled { return }
+            
             print("✅ [Visits] Received \(response.visits.count) visits")
             print("   📄 Has more: \(response.nextCursor != nil)")
             
             if refresh {
+                // Replace visits on refresh
                 visits = response.visits
             } else {
+                // Append for pagination
                 let existingIds = Set(visits.map { $0.id })
                 let newVisits = response.visits.filter { !existingIds.contains($0.id) }
                 visits.append(contentsOf: newVisits)
@@ -185,6 +310,7 @@ class ProfileViewModel: ObservableObject {
             print("📊 [Visits] Total loaded: \(visits.count)")
             
         } catch {
+            if Task.isCancelled { return }
             print("❌ [Visits] Error: \(error)")
         }
         
@@ -194,10 +320,11 @@ class ProfileViewModel: ObservableObject {
     func loadMoreVisitsIfNeeded(currentVisit: ProfileVisit) {
         guard let index = visits.firstIndex(where: { $0.id == currentVisit.id }) else { return }
         
-        if index >= visits.count - 5 && hasMoreVisits && visitsTask == nil {
-            visitsTask = Task { [weak self] in
-                await self?.loadVisits(refresh: false)
-                self?.visitsTask = nil
+        // Load more when near the end
+        if index >= visits.count - 5 && hasMoreVisits && paginationTask == nil {
+            paginationTask = Task { [weak self] in
+                await self?.loadVisitsInternal(refresh: false)
+                self?.paginationTask = nil
             }
         }
     }
@@ -259,24 +386,29 @@ class ProfileViewModel: ObservableObject {
         }
     }
     
-    // MARK: - Refresh
+    // MARK: - Refresh (Pull to refresh)
     
     func refresh() async {
-        if let handle = handle {
-            loadProfile(handle: handle)
-        } else {
-            loadOwnProfile()
+        // Ensure we have a handle
+        if handle == nil {
+            if let user = AuthManager.shared.currentUser {
+                self.handle = user.handle
+            } else {
+                return
+            }
         }
         
-        try? await Task.sleep(nanoseconds: 500_000_000)
-        await loadVisits(refresh: true)
+        // Don't cancel existing tasks - let them complete
+        // Just start a new fetch that will update the data
+        await performLoadProfile()
     }
     
     // MARK: - Memory Management
     
     func cleanup() {
-        fetchTask?.cancel()
-        visitsTask?.cancel()
+        currentProfileTask?.cancel()
+        currentVisitsTask?.cancel()
+        paginationTask?.cancel()
         
         if visits.count > 50 {
             visits = Array(visits.prefix(50))
@@ -284,9 +416,11 @@ class ProfileViewModel: ObservableObject {
         }
     }
     
+    /// Full reset - only call when navigating away completely
     func reset() {
-        fetchTask?.cancel()
-        visitsTask?.cancel()
+        currentProfileTask?.cancel()
+        currentVisitsTask?.cancel()
+        paginationTask?.cancel()
         profile = nil
         visits = []
         visitsCursor = nil
@@ -296,6 +430,7 @@ class ProfileViewModel: ObservableObject {
         isLoading = false
         error = nil
         isBioExpanded = false
+        handle = nil
     }
 }
 
@@ -337,8 +472,13 @@ struct ProfileVisit: Codable, Identifiable, Equatable {
     var photos: [String] { photoUrls ?? [] }
     var hasPhotos: Bool { !photos.isEmpty }
     
+    // Compare all fields for SwiftUI to detect changes
     static func == (lhs: ProfileVisit, rhs: ProfileVisit) -> Bool {
-        lhs.id == rhs.id
+        lhs.id == rhs.id &&
+        lhs.rating == rhs.rating &&
+        lhs.comment == rhs.comment &&
+        lhs.photoUrls == rhs.photoUrls &&
+        lhs.visibility == rhs.visibility
     }
 }
 
@@ -365,7 +505,6 @@ struct ProfilePlace: Codable {
         }
     }
     
-    // Convert to FeedPlace for FeedDetailView
     func toFeedPlace() -> FeedPlace {
         FeedPlace(
             id: id,
@@ -443,7 +582,7 @@ struct ListsCountResponse: Codable {
     let totalCount: Int?
 }
 
-// MARK: - API Response Model (matches user-profile edge function)
+// MARK: - API Response Model
 
 struct UserProfileAPIResponse: Codable {
     let id: String
@@ -481,7 +620,7 @@ struct UserProfileAPIResponse: Codable {
     }
 }
 
-// MARK: - Visits Response (matches visits-history edge function)
+// MARK: - CodingKeys
 
 extension ProfileVisitsResponse {
     enum CodingKeys: String, CodingKey {
@@ -489,8 +628,6 @@ extension ProfileVisitsResponse {
         case nextCursor = "next_cursor"
     }
 }
-
-// MARK: - Follow Response (matches follows-manage edge function)
 
 extension FollowResponse {
     enum CodingKeys: String, CodingKey {

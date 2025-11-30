@@ -1,14 +1,6 @@
-//
-//  PhotoCarouselView.swift
-//  gourney
-//
-//  Created by 曾家浩 on 2025/11/26.
-//
-
-
 // Views/Shared/PhotoCarouselView.swift
 // Instagram-style photo carousel with dynamic height
-// Aspect ratio bounds: max 4:5 (portrait), min 1.91:1 (landscape)
+// Aspect ratio bounds: max 3:4 (iPhone portrait), min 1.91:1 (landscape)
 
 import SwiftUI
 
@@ -20,9 +12,12 @@ struct PhotoCarouselView: View {
     var overlayContent: AnyView? = nil
     
     @State private var photoAspectRatio: CGFloat = 1.0  // Default square
+    @State private var imageLoaded = false
     
-    // Instagram-style bounds
-    private let maxRatio: CGFloat = 1.25   // 4:5 portrait max
+    // Aspect ratio bounds:
+    // - maxRatio 1.33 = 3:4 (iPhone portrait photos)
+    // - minRatio 0.52 = 1.91:1 (landscape/wide)
+    private let maxRatio: CGFloat = 1.33   // 3:4 iPhone portrait
     private let minRatio: CGFloat = 0.52   // 1.91:1 landscape min
     
     var body: some View {
@@ -31,7 +26,7 @@ struct PhotoCarouselView: View {
             let height = width * photoAspectRatio
             
             ZStack {
-                // Black background
+                // Background - only show if image doesn't fill
                 Rectangle()
                     .fill(Color.black)
                 
@@ -43,8 +38,9 @@ struct PhotoCarouselView: View {
                             case .success(let image):
                                 image
                                     .resizable()
-                                    .scaledToFit()
+                                    .scaledToFit()  // Show full image (black bars if needed)
                                     .frame(maxWidth: width, maxHeight: height)
+                                    .frame(width: width, height: height)
                                     .contentShape(Rectangle())
                                     .onTapGesture {
                                         onPhotoTap?()
@@ -114,6 +110,7 @@ struct PhotoCarouselView: View {
         if let cached = ImageDimensionCache.shared.get(for: firstPhoto) {
             let ratio = cached.height / cached.width
             photoAspectRatio = min(maxRatio, max(minRatio, ratio))
+            imageLoaded = true
             return
         }
         
@@ -131,6 +128,7 @@ struct PhotoCarouselView: View {
             DispatchQueue.main.async {
                 withAnimation(.easeInOut(duration: 0.25)) {
                     photoAspectRatio = boundedRatio
+                    imageLoaded = true
                 }
             }
         }.resume()
@@ -158,8 +156,6 @@ final class ImageDimensionCache {
         queue.async { self.cache.removeAll() }
     }
 }
-
-// MARK: - Preview
 
 #Preview {
     VStack {

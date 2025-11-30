@@ -158,8 +158,13 @@ struct FeedCardView: View {
                         .lineLimit(1)
                     
                     HStack(spacing: 8) {
-                        if let rating = item.rating {
-                            RatingStarsView(rating: rating, size: 12)
+                        // Rating number + stars
+                        HStack(spacing: 4) {
+                            Text(String(format: "%.1f", Double(item.rating ?? 0)))
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(.primary)
+                            
+                            RatingStarsView(rating: item.rating ?? 0, size: 12)
                         }
                         
                         if !item.place.locationString.isEmpty {

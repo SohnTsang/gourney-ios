@@ -235,7 +235,7 @@ struct PlaceDetailSheet: View {
                         }
                         .padding(.horizontal, 20)
                         .padding(.top, 12)
-                        .padding(.bottom, max(12, geometry.safeAreaInsets.bottom + 12))
+                        .padding(.bottom, 16)
                         .background(colorScheme == .dark ? Color(.systemBackground) : Color.white)
                     }
                 }
@@ -292,21 +292,37 @@ struct PlaceDetailSheet: View {
     // MARK: - Load All Data
     
     private func loadAllData() async {
+        print("🔍 [PlaceDetail] Starting loadAllData")
+        print("🔍 [PlaceDetail] placeId: \(placeId)")
+        print("🔍 [PlaceDetail] displayName: \(displayName)")
+        print("🔍 [PlaceDetail] lat: \(lat), lng: \(lng)")
+        print("🔍 [PlaceDetail] googlePlaceId: \(googlePlaceId ?? "nil")")
+        
         let visitsData = await fetchVisits()
+        print("🔍 [PlaceDetail] visitsData: \(visitsData != nil ? "loaded \(visitsData!.visitCount) visits" : "nil")")
         
         // ✅ ALWAYS fetch DB data first (contains visit avgRating)
         let placeData = try? await fetchPlaceData(placeId: placeId)
+        print("🔍 [PlaceDetail] placeData from DB: \(placeData != nil ? "loaded" : "nil")")
+        if let placeData = placeData {
+            print("🔍 [PlaceDetail] DB name: \(placeData.name ?? "nil")")
+            print("🔍 [PlaceDetail] DB address: \(placeData.address ?? "nil")")
+            print("🔍 [PlaceDetail] DB avgRating: \(placeData.avgRating ?? 0)")
+        }
         
         if let (fetchedVisits, count) = visitsData {
             visits = fetchedVisits
             visitCount = count
             cachedPhotoUrls = computeTopVisitPhotos(from: fetchedVisits)
+            print("✅ [PlaceDetail] Set visits: \(count), photos: \(cachedPhotoUrls?.count ?? 0)")
         }
         
         let isStub = displayName == "Unknown Place" || displayName.isEmpty
+        print("🔍 [PlaceDetail] isStub: \(isStub)")
         
         if isStub, let googleId = googlePlaceId {
             // Fetch Google for name, address, phone, website, hours
+            print("🔍 [PlaceDetail] Fetching from Google API...")
             do {
                 let googleData = try await GooglePlaceDetailFetcher.shared.fetchDetails(googlePlaceId: googleId)
                 
@@ -330,6 +346,7 @@ struct PlaceDetailSheet: View {
             }
         } else if let placeData = placeData {
             // Non-stub: use all DB data
+            print("✅ [PlaceDetail] Using DB data (non-stub)")
             avgRating = placeData.avgRating
             placeAddress = placeData.address
             placePhone = placeData.phone
@@ -340,9 +357,13 @@ struct PlaceDetailSheet: View {
             if let name = placeData.name, !name.isEmpty {
                 placeName = name
             }
+            print("✅ [PlaceDetail] Set - name: \(placeName ?? "nil"), address: \(placeAddress ?? "nil"), rating: \(avgRating ?? 0)")
+        } else {
+            print("⚠️ [PlaceDetail] No data loaded - placeData is nil and not a stub")
         }
         
         isLoading = false
+        print("✅ [PlaceDetail] Loading complete, isLoading = false")
         MemoryDebugHelper.shared.logMemory(tag: "✅ PlaceDetail Loaded")
     }
     
