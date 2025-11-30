@@ -574,7 +574,7 @@ struct ListGridItem: View {
                         case .success(let image):
                             image
                                 .resizable()
-                                .aspectRatio(contentMode: .fill)
+                                .scaledToFill()
                                 .frame(width: geometry.size.width, height: geometry.size.height)
                                 .clipped()
                                 .transition(.opacity.animation(.easeInOut(duration: 0.3)))
@@ -634,9 +634,9 @@ struct ListGridItem: View {
                 )
             }
         }
-        .aspectRatio(4/5, contentMode: .fit)  // ✅ Slightly taller aspect ratio for 2-column
+        .aspectRatio(1, contentMode: .fit)  // ✅ Square aspect ratio
         .clipped()
-        .clipShape(RoundedRectangle(cornerRadius: 12))  // ✅ Add rounded corners for 2-column grid
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
     
     private var placeholderWithLoading: some View {
@@ -674,68 +674,70 @@ struct FollowingListGridItem: View {
     @Environment(\.colorScheme) private var colorScheme
     
     var body: some View {
-        ZStack {
-            // Cover image or placeholder
-            Group {
-                if let coverUrl = item.coverPhotoUrl, let url = URL(string: coverUrl) {
-                    AsyncImage(url: url) { phase in
-                        switch phase {
-                        case .success(let image):
-                            image
-                                .resizable()
-                                .scaledToFill()
-                        case .failure, .empty:
-                            placeholderView
-                        @unknown default:
-                            placeholderView
+        GeometryReader { geometry in
+            ZStack {
+                // Cover image or placeholder
+                Group {
+                    if let coverUrl = item.coverPhotoUrl, let url = URL(string: coverUrl) {
+                        AsyncImage(url: url) { phase in
+                            switch phase {
+                            case .success(let image):
+                                image
+                                    .resizable()
+                                    .scaledToFill()
+                                    .frame(width: geometry.size.width, height: geometry.size.height)
+                                    .clipped()
+                            case .failure, .empty:
+                                placeholderView
+                            @unknown default:
+                                placeholderView
+                            }
                         }
+                    } else {
+                        placeholderView
                     }
-                } else {
-                    placeholderView
                 }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipped()
-            
-            // Title + Owner overlay
-            VStack(alignment: .leading, spacing: 4) {
-                Spacer()
                 
-                Text(item.title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(.white)
-                    .lineLimit(2)
-                
-                // ✅ Bottom row: handle (left) and like count (right)
-                HStack {
-                    Text("@\(item.userHandle)")
-                        .font(.system(size: 11))
-                        .foregroundColor(.white.opacity(0.8))
-                    
+                // Title + Owner overlay
+                VStack(alignment: .leading, spacing: 4) {
                     Spacer()
                     
-                    // ✅ Like count (bottom right) - no background
-                    HStack(spacing: 3) {
-                        Image(systemName: "heart.fill")
-                            .font(.system(size: 10))
-                        Text("\(item.likesCount ?? 0)")
-                            .font(.system(size: 11, weight: .medium))
+                    Text(item.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.white)
+                        .lineLimit(2)
+                    
+                    // Bottom row: handle (left) and like count (right)
+                    HStack {
+                        Text("@\(item.userHandle)")
+                            .font(.system(size: 11))
+                            .foregroundColor(.white.opacity(0.8))
+                        
+                        Spacer()
+                        
+                        // Like count (bottom right) - no background
+                        HStack(spacing: 3) {
+                            Image(systemName: "heart.fill")
+                                .font(.system(size: 10))
+                            Text("\(item.likesCount ?? 0)")
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                        .foregroundColor(.white.opacity(0.9))
                     }
-                    .foregroundColor(.white.opacity(0.9))
                 }
-            }
-            .padding(8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                LinearGradient(
-                    colors: [.clear, .black.opacity(0.7)],
-                    startPoint: .top,
-                    endPoint: .bottom
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    LinearGradient(
+                        colors: [.clear, .black.opacity(0.7)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
                 )
-            )
+            }
         }
-        .aspectRatio(4/5, contentMode: .fit)  // ✅ Match aspect ratio
-        .clipShape(RoundedRectangle(cornerRadius: 12))  // ✅ Add rounded corners
+        .aspectRatio(1, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
     
     private var placeholderView: some View {
@@ -829,8 +831,8 @@ struct PopularListGridItem: View {
                     )
                 )
             }
-            .aspectRatio(4/5, contentMode: .fit)  // ✅ Match aspect ratio
-            .clipShape(RoundedRectangle(cornerRadius: 12))  // ✅ Add rounded corners
+            .aspectRatio(1, contentMode: .fit)  // ✅ Square aspect ratio
+            .clipShape(RoundedRectangle(cornerRadius: 12))
         }
         .buttonStyle(PlainButtonStyle())
     }

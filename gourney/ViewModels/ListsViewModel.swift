@@ -1,5 +1,5 @@
 // gourney/ViewModels/ListsViewModel.swift
-// UPDATED: Fixed lists-get-following to use POST
+// ✅ FIXED: Load ownership pattern to prevent placeholder flash on tab switch
 
 import Foundation
 import Combine
@@ -59,6 +59,9 @@ class ListsViewModel: ObservableObject {
     
     private let client = SupabaseClient.shared
     
+    // ✅ Load ownership tracking to prevent race conditions on tab switch
+    private var currentLoadId: UUID?
+    
     // Clear memory when leaving tab
     func clearMemory() {
         defaultLists.removeAll(keepingCapacity: false)
@@ -69,10 +72,17 @@ class ListsViewModel: ObservableObject {
         followingPage = 0
         hasMoreMyLists = true
         hasMoreFollowing = true
+        currentLoadId = nil
         print("🧹 [Lists] Memory cleared")
     }
     
+    // MARK: - My Lists
+    
     func loadLists(loadMore: Bool = false) async {
+        // ✅ Generate new load ID and set loading state BEFORE starting async work
+        let loadId = UUID()
+        currentLoadId = loadId
+        
         if loadMore {
             guard hasMoreMyLists && !isLoadingMore else { return }
             isLoadingMore = true
@@ -82,15 +92,22 @@ class ListsViewModel: ObservableObject {
             hasMoreMyLists = true
         }
         
+        print("🔄 [Lists] loadLists started - loadId: \(loadId.uuidString.prefix(8))")
         errorMessage = nil
         
         do {
-            guard let userId = client.getAuthToken() else {
+            guard client.getAuthToken() != nil else {
                 throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Not authenticated"])
             }
             
             if !loadMore {
                 await createDefaultListsIfNeeded()
+            }
+            
+            // ✅ Check ownership before network call
+            guard currentLoadId == loadId else {
+                print("⚡ [Lists] MyLists load cancelled before request - ownership changed")
+                return
             }
             
             let body: [String: Any] = [:]
@@ -99,6 +116,12 @@ class ListsViewModel: ObservableObject {
                 body: body,
                 requiresAuth: true
             )
+            
+            // ✅ Check ownership after network call - critical!
+            guard currentLoadId == loadId else {
+                print("⚡ [Lists] MyLists load completed but ownership changed - discarding")
+                return
+            }
             
             let allLists = response.lists
             let defaults = allLists.filter {
@@ -127,7 +150,13 @@ class ListsViewModel: ObservableObject {
             
             isLoading = false
             isLoadingMore = false
+            print("✅ [Lists] Loaded \(allLists.count) lists")
         } catch {
+            // ✅ Only update state if we still own the load
+            guard currentLoadId == loadId else {
+                print("⚡ [Lists] MyLists error but ownership changed - ignoring")
+                return
+            }
             errorMessage = error.localizedDescription
             isLoading = false
             isLoadingMore = false
@@ -135,25 +164,43 @@ class ListsViewModel: ObservableObject {
         }
     }
     
+    // MARK: - Following Lists
+    
     func loadFollowingLists(loadMore: Bool = false) async {
+        // ✅ Generate new load ID and set loading state BEFORE starting async work
+        let loadId = UUID()
+        currentLoadId = loadId
+        
         if loadMore {
             guard hasMoreFollowing && !isLoadingMore else { return }
             isLoadingMore = true
         } else {
-            // Don't reset the list immediately for smoother UI
             isLoading = true
             followingPage = 0
             hasMoreFollowing = true
         }
         
+        print("🔄 [Lists] loadFollowingLists started - loadId: \(loadId.uuidString.prefix(8))")
         errorMessage = nil
         
         do {
+            // ✅ Check ownership before network call
+            guard currentLoadId == loadId else {
+                print("⚡ [Lists] Following load cancelled before request - ownership changed")
+                return
+            }
+            
             let response: FollowingListsResponse = try await client.post(
                 path: "/functions/v1/lists-get-following",
                 body: [:],
                 requiresAuth: true
             )
+            
+            // ✅ Check ownership after network call - critical!
+            guard currentLoadId == loadId else {
+                print("⚡ [Lists] Following load completed but ownership changed - discarding")
+                return
+            }
             
             let allFollowing = response.lists.map { apiList in
                 FollowingListItem(
@@ -195,6 +242,11 @@ class ListsViewModel: ObservableObject {
             isLoadingMore = false
             print("✅ [Lists] Loaded \(followingLists.count) following lists")
         } catch {
+            // ✅ Only update state if we still own the load
+            guard currentLoadId == loadId else {
+                print("⚡ [Lists] Following error but ownership changed - ignoring")
+                return
+            }
             errorMessage = error.localizedDescription
             isLoading = false
             isLoadingMore = false
@@ -306,10 +358,16 @@ class ListsViewModel: ObservableObject {
     }
 }
 
+// MARK: - Popular Lists Extension
+
 extension ListsViewModel {
     @MainActor
     func loadPopularLists(loadMore: Bool = false) async {
-        print("🔍 [Popular] loadPopularLists called - loadMore: \(loadMore)")
+        // ✅ Generate new load ID and set loading state BEFORE starting async work
+        let loadId = UUID()
+        currentLoadId = loadId
+        
+        print("🔍 [Popular] loadPopularLists called - loadMore: \(loadMore), loadId: \(loadId.uuidString.prefix(8))")
         print("🔍 [Popular] Current state - count: \(popularLists.count), isLoading: \(isLoading), isLoadingMore: \(isLoadingMore)")
         
         // Skip if already loaded (not loading more)
@@ -318,18 +376,12 @@ extension ListsViewModel {
             return
         }
         
-        // Skip if already in progress
-        if loadMore && isLoadingMore {
-            print("⏭️ [Popular] Already loading more, skipping")
-            return
-        }
-        if !loadMore && isLoading {
-            print("⏭️ [Popular] Already loading, skipping")
-            return
-        }
-        
-        // Set loading flags
+        // Set loading flags BEFORE any async work
         if loadMore {
+            guard !isLoadingMore else {
+                print("⏭️ [Popular] Already loading more, skipping")
+                return
+            }
             print("🔄 [Popular] Setting isLoadingMore = true")
             isLoadingMore = true
         } else {
@@ -338,12 +390,24 @@ extension ListsViewModel {
         }
         
         do {
+            // ✅ Check ownership before network call
+            guard currentLoadId == loadId else {
+                print("⚡ [Popular] Load cancelled before request - ownership changed")
+                return
+            }
+            
             let body: [String: Any] = ["limit": 20]
             let response: PopularListsResponse = try await client.post(
                 path: "/functions/v1/lists-get-popular",
                 body: body,
                 requiresAuth: true
             )
+            
+            // ✅ Check ownership after network call - critical!
+            guard currentLoadId == loadId else {
+                print("⚡ [Popular] Load completed but ownership changed - discarding")
+                return
+            }
             
             if loadMore {
                 // Filter out duplicates before appending
@@ -356,14 +420,23 @@ extension ListsViewModel {
             }
             
             print("✅ [Popular] Loaded \(response.lists.count) popular lists")
+            
+            // ✅ Only reset loading state if we still own it
+            isLoading = false
+            isLoadingMore = false
         } catch {
+            // ✅ Only update state if we still own the load
+            guard currentLoadId == loadId else {
+                print("⚡ [Popular] Error but ownership changed - ignoring")
+                return
+            }
             print("❌ [Popular] Error loading: \(error)")
             errorMessage = error.localizedDescription
+            isLoading = false
+            isLoadingMore = false
         }
         
-        print("🔄 [Popular] Setting isLoading = false, isLoadingMore = false")
-        isLoading = false
-        isLoadingMore = false
+        print("🔄 [Popular] Load complete for loadId: \(loadId.uuidString.prefix(8))")
     }
     
     @MainActor

@@ -88,9 +88,6 @@
     "Add Photos" : {
 
     },
-    "Add Place" : {
-
-    },
     "Add Places" : {
 
     },
@@ -98,9 +95,6 @@
 
     },
     "Add Visit" : {
-
-    },
-    "Add your first restaurant to this list" : {
 
     },
     "All" : {
@@ -878,9 +872,6 @@
 
     },
     "Cancel" : {
-
-    },
-    "Change" : {
 
     },
     "Change Photo" : {
@@ -2888,6 +2879,9 @@
 
     },
     "Save %@ to list" : {
+
+    },
+    "Save places from discover or feed\nto add them to this list" : {
 
     },
     "Save to List" : {

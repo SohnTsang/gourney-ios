@@ -1,6 +1,5 @@
 // Views/Lists/ListDetailView.swift
-// Redesigned with DetailTopBar + slide-up menu for owner actions
-// Consistent heart icon design matching FeedCardView
+// ✅ Redesigned with Spotify-style centered cover image + owner info section
 
 import SwiftUI
 import PhotosUI
@@ -59,8 +58,8 @@ struct ListDetailView: View {
                 
                 ScrollView {
                     VStack(spacing: 0) {
-                        // Cover Image
-                        CoverImageView(
+                        // ✅ Spotify-style Cover Image Section
+                        SpotifyCoverImageView(
                             coverUrl: list.coverPhotoUrl,
                             isReadOnly: isReadOnly,
                             onUpload: { image in
@@ -72,9 +71,17 @@ struct ListDetailView: View {
                             }
                         )
                         
-                        // List Info Section
+                        // ✅ Owner Info Section (Avatar + DisplayName + Handle)
+                        OwnerInfoSection(
+                            avatarUrl: viewModel.ownerAvatarUrl,
+                            displayName: viewModel.ownerDisplayName,
+                            handle: isReadOnly ? ownerHandle : viewModel.ownerHandle
+                        )
+                        .padding(.top, 16)
+                        .padding(.bottom, 8)
+                        
+                        // ✅ Stats Row - Places count and Likes
                         VStack(spacing: 12) {
-                            // Stats Row - Places on left, Likes/Button on right
                             HStack {
                                 HStack(spacing: 6) {
                                     Image(systemName: "mappin.circle.fill")
@@ -223,7 +230,6 @@ struct ListDetailView: View {
                     googlePlaceId: place.googlePlaceId,
                     primaryButtonTitle: "Add Visit",
                     primaryButtonAction: {
-                        // Set flag and dismiss sheet
                         pendingAddVisit = true
                         showPlaceDetail = false
                     },
@@ -237,7 +243,6 @@ struct ListDetailView: View {
             }
         }
         .onChange(of: showPlaceDetail) { _, newValue in
-            // When sheet dismisses and we have pending AddVisit
             if !newValue && pendingAddVisit {
                 pendingAddVisit = false
                 showAddVisitFromDetail = true
@@ -323,6 +328,168 @@ struct ListDetailView: View {
         }
     }
     
+}
+
+// MARK: - Owner Info Section
+
+struct OwnerInfoSection: View {
+    let avatarUrl: String?
+    let displayName: String?
+    let handle: String?
+    
+    @Environment(\.colorScheme) private var colorScheme
+    
+    var body: some View {
+        HStack(spacing: 10) {
+            // Avatar
+            AvatarView(url: avatarUrl, size: 40)
+            
+            // Display Name + Handle
+            VStack(alignment: .leading, spacing: 2) {
+                if let displayName = displayName, !displayName.isEmpty {
+                    Text(displayName)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(.primary)
+                }
+                
+                if let handle = handle {
+                    Text("@\(handle)")
+                        .font(.system(size: 13))
+                        .foregroundColor(.secondary)
+                }
+            }
+            
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(colorScheme == .dark ? Color(.systemBackground) : Color.white)
+    }
+}
+
+// MARK: - Spotify-style Cover Image View (Centered Square)
+
+struct SpotifyCoverImageView: View {
+    let coverUrl: String?
+    let isReadOnly: Bool
+    let onUpload: (UIImage) async -> String?
+    
+    @State private var selectedItem: PhotosPickerItem?
+    @State private var isUploading = false
+    @State private var currentCoverUrl: String?
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // ✅ Centered square cover image area
+            ZStack {
+                // Square cover image
+                ZStack(alignment: .bottomTrailing) {
+                    if let url = currentCoverUrl ?? coverUrl {
+                        AsyncImage(url: URL(string: url)) { phase in
+                            switch phase {
+                            case .success(let image):
+                                image
+                                    .resizable()
+                                    .scaledToFill()
+                                    .frame(width: 200, height: 200)
+                                    .clipped()
+                            case .failure(_):
+                                placeholderView
+                            case .empty:
+                                ZStack {
+                                    placeholderView
+                                    ProgressView()
+                                        .tint(GourneyColors.coral.opacity(0.6))
+                                }
+                            @unknown default:
+                                placeholderView
+                            }
+                        }
+                    } else {
+                        placeholderView
+                    }
+                    
+                    // ✅ Change photo button in bottom right
+                    if !isReadOnly {
+                        PhotosPicker(selection: $selectedItem, matching: .images) {
+                            Image(systemName: "camera.fill")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundColor(.white)
+                                .padding(10)
+                                .background(
+                                    Circle()
+                                        .fill(GourneyColors.coral)
+                                        .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
+                                )
+                        }
+                        .disabled(isUploading)
+                        .opacity(isUploading ? 0 : 1)
+                        .padding(12)
+                    }
+                }
+                .frame(width: 200, height: 200)  // ✅ Fixed square size
+                .background(Color.gray.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
+                
+                // Upload overlay
+                if isUploading {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.black.opacity(0.5))
+                        .frame(width: 200, height: 200)
+                    
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .scaleEffect(1.2)
+                }
+            }
+            .padding(.vertical, 24)
+        }
+        .frame(maxWidth: .infinity)
+        .background(Color(UIColor.systemGroupedBackground))
+        .onChange(of: selectedItem) { _, newItem in
+            Task {
+                if let data = try? await newItem?.loadTransferable(type: Data.self),
+                   let image = UIImage(data: data) {
+                    isUploading = true
+                    
+                    if let newUrl = await onUpload(image) {
+                        await MainActor.run {
+                            withAnimation(.easeInOut(duration: 0.3)) {
+                                currentCoverUrl = newUrl
+                            }
+                        }
+                    }
+                    
+                    isUploading = false
+                    selectedItem = nil
+                }
+            }
+        }
+        .onAppear {
+            currentCoverUrl = coverUrl
+        }
+        .onChange(of: coverUrl) { _, newUrl in
+            currentCoverUrl = newUrl
+        }
+    }
+    
+    private var placeholderView: some View {
+        ZStack {
+            LinearGradient(
+                colors: [
+                    GourneyColors.coral.opacity(0.2),
+                    GourneyColors.coral.opacity(0.1)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            
+            Image(systemName: "photo")
+                .font(.system(size: 40))
+                .foregroundColor(GourneyColors.coral.opacity(0.4))
+        }
+    }
 }
 
 // MARK: - List Detail Top Bar
@@ -457,122 +624,6 @@ struct ListDetailMenuSheet: View {
     }
 }
 
-// MARK: - Cover Image View
-
-struct CoverImageView: View {
-    let coverUrl: String?
-    let isReadOnly: Bool
-    let onUpload: (UIImage) async -> String?
-    
-    @State private var selectedItem: PhotosPickerItem?
-    @State private var isUploading = false
-    @State private var currentCoverUrl: String?
-    
-    var body: some View {
-        ZStack {
-            ZStack(alignment: .bottomTrailing) {
-                if let url = currentCoverUrl ?? coverUrl {
-                    AsyncImage(url: URL(string: url)) { phase in
-                        switch phase {
-                        case .success(let image):
-                            image
-                                .resizable()
-                                .scaledToFill()
-                        case .failure(_):
-                            placeholderView
-                        case .empty:
-                            placeholderView
-                        @unknown default:
-                            placeholderView
-                        }
-                    }
-                } else {
-                    placeholderView
-                }
-                
-                if !isReadOnly {
-                    PhotosPicker(selection: $selectedItem, matching: .images) {
-                        HStack(spacing: 6) {
-                            Image(systemName: "camera.fill")
-                            Text(currentCoverUrl == nil && coverUrl == nil ? "Add" : "Change")
-                                .fontWeight(.medium)
-                        }
-                        .font(.system(size: 14))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 7)
-                        .background(
-                            LinearGradient(
-                                colors: [GourneyColors.coral, GourneyColors.coral.opacity(0.8)],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                        )
-                        .clipShape(Capsule())
-                        .shadow(color: .black.opacity(0.2), radius: 4, y: 2)
-                        .padding(16)
-                    }
-                    .disabled(isUploading)
-                    .opacity(isUploading ? 0 : 1)
-                }
-            }
-            
-            if isUploading {
-                Color.black.opacity(0.4)
-                    .ignoresSafeArea()
-                
-                ProgressView()
-                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                    .scaleEffect(1.5)
-            }
-        }
-        .frame(height: 200)
-        .clipShape(Rectangle())
-        .onChange(of: selectedItem) { _, newItem in
-            Task {
-                if let data = try? await newItem?.loadTransferable(type: Data.self),
-                   let image = UIImage(data: data) {
-                    isUploading = true
-                    
-                    if let newUrl = await onUpload(image) {
-                        await MainActor.run {
-                            withAnimation(.easeInOut(duration: 0.3)) {
-                                currentCoverUrl = newUrl
-                            }
-                        }
-                    }
-                    
-                    isUploading = false
-                    selectedItem = nil
-                }
-            }
-        }
-        .onAppear {
-            currentCoverUrl = coverUrl
-        }
-        .onChange(of: coverUrl) { _, newUrl in
-            currentCoverUrl = newUrl
-        }
-    }
-    
-    private var placeholderView: some View {
-        ZStack {
-            LinearGradient(
-                colors: [
-                    GourneyColors.coral.opacity(0.2),
-                    GourneyColors.coral.opacity(0.1)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            
-            Image(systemName: "photo")
-                .font(.system(size: 40))
-                .foregroundColor(GourneyColors.coral.opacity(0.4))
-        }
-    }
-}
-
 // MARK: - Empty Places View
 
 struct EmptyPlacesView: View {
@@ -590,20 +641,17 @@ struct EmptyPlacesView: View {
                     .font(.title3)
                     .fontWeight(.semibold)
                 
-                Text(isReadOnly ? "This list is empty" : "Add your first restaurant to this list")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-            }
-            
-            if !isReadOnly {
-                Button(action: { showAddPlace = true }) {
-                    Label("Add Place", systemImage: "plus")
-                        .font(.headline)
-                        .foregroundColor(.white)
-                        .frame(width: 160, height: 44)
-                        .background(GourneyColors.coral)
-                        .clipShape(Capsule())
+                if isReadOnly {
+                    Text("This list is empty")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                } else {
+                    Text("Save places from discover or feed\nto add them to this list")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 20)
                 }
             }
         }
@@ -613,7 +661,6 @@ struct EmptyPlacesView: View {
     }
 }
 
-// MARK: - Add Place Sheet
 
 struct AddPlaceToListSheet: View {
     let listId: String
@@ -648,6 +695,7 @@ struct AddPlaceToListSheet: View {
     }
 }
 
+
 // MARK: - Swipe to Delete Row
 
 struct SwipeToDeleteRow: View {
@@ -657,91 +705,67 @@ struct SwipeToDeleteRow: View {
     let onDelete: () -> Void
     
     @State private var offset: CGFloat = 0
-    @Environment(\.colorScheme) private var colorScheme
+    @State private var showingDelete = false
     
-    private let deleteButtonWidth: CGFloat = 80
-    private let deleteThreshold: CGFloat = 60
+    private let deleteThreshold: CGFloat = -80
     
     var body: some View {
         ZStack(alignment: .trailing) {
-            Button(action: {
-                onDelete()
-            }) {
-                VStack(spacing: 4) {
+            // Delete background
+            HStack {
+                Spacer()
+                Button(action: {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                        onDelete()
+                    }
+                }) {
                     Image(systemName: "trash.fill")
-                        .font(.system(size: 20, weight: .medium))
-                    Text("Delete")
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.system(size: 20))
+                        .foregroundColor(.white)
+                        .frame(width: 80, height: 72)
+                        .background(Color.red)
                 }
-                .foregroundColor(.white)
-                .frame(width: deleteButtonWidth)
-                .frame(maxHeight: .infinity)
             }
-            .frame(maxWidth: .infinity, alignment: .trailing)
-            .background(Color.red)
             
+            // Content
             PlaceRowView(
                 item: PlaceRowItem(from: item),
                 distance: distance,
                 showRemoveButton: false,
                 onRemove: nil
             )
-            .background(colorScheme == .dark ? Color(.systemBackground) : Color.white)
+            .background(Color(UIColor.systemBackground))
             .offset(x: offset)
             .gesture(
                 DragGesture()
                     .onChanged { value in
-                        let translation = value.translation.width
-                        if translation < 0 {
-                            offset = max(translation, -deleteButtonWidth)
-                        } else if offset < 0 {
-                            offset = min(0, offset + translation)
+                        if value.translation.width < 0 {
+                            offset = value.translation.width
                         }
                     }
                     .onEnded { value in
-                        withAnimation(.spring(response: 0.3)) {
-                            if offset < -deleteThreshold {
-                                offset = -deleteButtonWidth
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                            if value.translation.width < deleteThreshold {
+                                offset = deleteThreshold
+                                showingDelete = true
                             } else {
                                 offset = 0
+                                showingDelete = false
                             }
                         }
                     }
             )
-            .simultaneousGesture(
-                TapGesture()
-                    .onEnded { _ in
-                        if offset < 0 {
-                            withAnimation(.spring(response: 0.3)) {
-                                offset = 0
-                            }
-                        } else {
-                            onTap()
-                        }
+            .onTapGesture {
+                if showingDelete {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                        offset = 0
+                        showingDelete = false
                     }
-            )
+                } else {
+                    onTap()
+                }
+            }
         }
-        .frame(height: 90)
-        .clipped()
-    }
-}
-
-#Preview {
-    NavigationStack {
-        ListDetailView(
-            list: RestaurantList(
-                id: "preview",
-                title: "My Favorites",
-                description: "Best restaurants",
-                visibility: "public",
-                itemCount: 5,
-                coverPhotoUrl: nil,
-                createdAt: "",
-                likesCount: 10,
-                viewCount: nil
-            ),
-            isReadOnly: false
-        )
     }
 }
 
@@ -752,91 +776,75 @@ class ListDetailViewModel: ObservableObject {
     @Published var places: [ListItem] = []
     @Published var isLoading = false
     @Published var errorMessage: String?
-    @Published var likeStatus: (hasLiked: Bool, likesCount: Int)?
-    
-    // Like state (moved from View)
     @Published var isLiked = false
     @Published var likesCount: Int = 0
     @Published var likeScale: CGFloat = 1.0
     
+    // ✅ Owner info from API
+    @Published var ownerHandle: String?
+    @Published var ownerDisplayName: String?
+    @Published var ownerAvatarUrl: String?
+    
+    var likeStatus: (hasLiked: Bool, likesCount: Int) = (false, 0)
+    
     private let client = SupabaseClient.shared
     private var loadTask: Task<Void, Never>?
-    private var pendingLikeTask: Task<Void, Never>?
+    private var likeDebounceTask: Task<Void, Never>?
     
     deinit {
         loadTask?.cancel()
-        pendingLikeTask?.cancel()
-        print("🧹 [ListDetailVM] Cleaning up")
+        likeDebounceTask?.cancel()
     }
     
-    // MARK: - Toggle Like (Instagram-style - final state always wins)
+    // MARK: - Like Toggle
     
     func toggleLike(listId: String) {
-        // Haptic feedback
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        let newState = !isLiked
         
-        // Animate scale
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+        // Optimistic UI update
+        isLiked = newState
+        likesCount += newState ? 1 : -1
+        
+        // Animate heart
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.5)) {
             likeScale = 1.3
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.5)) {
                 self.likeScale = 1.0
             }
         }
         
-        // Optimistic UI update
-        isLiked.toggle()
-        likesCount += isLiked ? 1 : -1
-        likesCount = max(0, likesCount)
-        
-        // Cancel any pending API call
-        pendingLikeTask?.cancel()
-        
-        // Capture the final desired state AFTER the toggle
-        let finalDesiredState = isLiked
-        
-        // Debounce: wait 300ms before making API call
-        pendingLikeTask = Task {
-            try? await Task.sleep(nanoseconds: 300_000_000) // 300ms
-            
+        // Debounce API call
+        likeDebounceTask?.cancel()
+        likeDebounceTask = Task {
+            try? await Task.sleep(nanoseconds: 300_000_000)
             guard !Task.isCancelled else { return }
-            
-            await syncLikeWithServer(listId: listId, desiredState: finalDesiredState)
+            await syncLikeWithServer(listId: listId, desiredState: newState)
         }
     }
     
     private func syncLikeWithServer(listId: String, desiredState: Bool) async {
-        // If UI state changed since we scheduled this call, don't proceed
-        guard isLiked == desiredState else { return }
-        
         do {
-            let body: [String: String] = ["list_id": listId]
+            let body: [String: Any] = [
+                "list_id": listId,
+                "action": desiredState ? "like" : "unlike"
+            ]
             
-            struct ListLikeToggleResponse: Codable {
-                let listId: String?
-                let liked: Bool
-                let likeCount: Int
-                let createdAt: String?
-            }
-            
-            let response: ListLikeToggleResponse = try await client.post(
-                path: "/functions/v1/lists-like-toggle",
+            let response: ListLikeResponse = try await client.post(
+                path: "/functions/v1/lists-like",
                 body: body,
                 requiresAuth: true
             )
             
             guard !Task.isCancelled else { return }
             
-            // Check if UI state still matches what we wanted
             let currentState = isLiked
             
-            // If server state matches desired state, sync the count
             if response.liked == desiredState {
                 likesCount = response.likeCount
                 likeStatus = (hasLiked: response.liked, likesCount: response.likeCount)
             } else if currentState == desiredState {
-                // Server disagrees but UI shows what user wants - call API again to fix
                 print("⚠️ [ListLike] Server mismatch, retrying to sync...")
                 await syncLikeWithServer(listId: listId, desiredState: desiredState)
                 return
@@ -847,7 +855,6 @@ class ListDetailViewModel: ObservableObject {
         } catch {
             guard !Task.isCancelled else { return }
             print("❌ [ListLike] Error: \(error)")
-            // Don't revert - keep UI state as user intended
         }
     }
     
@@ -878,10 +885,16 @@ class ListDetailViewModel: ObservableObject {
                         likesCount = response.list.likesCount
                         likeStatus = (hasLiked: response.list.hasLiked, likesCount: response.list.likesCount)
                         
+                        // ✅ Set owner info from API response
+                        ownerHandle = response.list.ownerHandle
+                        ownerDisplayName = response.list.ownerDisplayName
+                        ownerAvatarUrl = response.list.ownerAvatarUrl
+                        
                         completion?(response.list.hasLiked, response.list.likesCount)
                     }
                     
                     print("✅ [ListDetail] Loaded \(response.items.count) places")
+                    print("   👤 Owner: \(response.list.ownerDisplayName ?? "nil") (@\(response.list.ownerHandle ?? "nil"))")
                 } catch {
                     if !Task.isCancelled {
                         await MainActor.run {
