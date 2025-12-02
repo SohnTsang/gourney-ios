@@ -4,6 +4,9 @@
     "" : {
 
     },
+    "—" : {
+
+    },
     "·" : {
 
     },
@@ -37,6 +40,9 @@
           }
         }
       }
+    },
+    "%lld points" : {
+
     },
     "%lld pts" : {
 
@@ -860,6 +866,9 @@
 
     },
     "Be the first to comment!" : {
+
+    },
+    "Be the first to earn points\nin this area!" : {
 
     },
     "Be the first to visit!" : {
@@ -2121,6 +2130,9 @@
     "Location Permission Required" : {
 
     },
+    "Location unavailable" : {
+
+    },
     "location.error.denied" : {
       "comment" : "Location permission denied",
       "extractionState" : "manual",
@@ -2223,9 +2235,6 @@
     "More" : {
 
     },
-    "N/A" : {
-
-    },
     "Name" : {
 
     },
@@ -2266,6 +2275,9 @@
 
     },
     "No visits yet" : {
+
+    },
+    "Not ranked yet" : {
 
     },
     "OK" : {
@@ -2915,6 +2927,9 @@
 
     },
     "Selected: %lld photos" : {
+
+    },
+    "Set in profile" : {
 
     },
     "Settings" : {

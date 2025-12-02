@@ -1,6 +1,7 @@
 // Views/Shared/SharedComponents.swift
 // Reusable UI components following Gourney design system
 // Coral theme: Color(red: 1.0, green: 0.4, blue: 0.4)
+// ✅ FIX: Tapping own avatar switches to Profile tab instead of no response
 
 import SwiftUI
 
@@ -19,6 +20,7 @@ struct GourneyColors {
 }
 
 // MARK: - Avatar View (Matches RankView style)
+// ✅ FIX: Tapping own avatar now switches to Profile tab
 
 struct AvatarView: View {
     let url: String?
@@ -30,7 +32,7 @@ struct AvatarView: View {
     // Access the shared navigation coordinator
     @ObservedObject private var navigator = NavigationCoordinator.shared
     
-    // Computed property to check if tap navigation is enabled
+    // ✅ Updated: Check if tap should be enabled (now includes current user)
     private var isTappable: Bool {
         guard let userId = userId else { return false }
         return navigator.canNavigateToProfile(userId: userId)
@@ -78,6 +80,7 @@ struct AvatarView: View {
         .contentShape(Circle())
         .onTapGesture {
             if let userId = userId, isTappable {
+                // ✅ This now handles both current user (tab switch) and other users (push)
                 navigator.showProfile(userId: userId)
             }
         }
@@ -294,6 +297,7 @@ struct FeedActionButton: View {
 }
 
 // MARK: - Tappable User View (For username labels that navigate to profile)
+// ✅ Updated: Now also handles current user (switches to Profile tab)
 
 struct TappableUsername: View {
     let username: String
@@ -314,6 +318,7 @@ struct TappableUsername: View {
             .contentShape(Rectangle())
             .onTapGesture {
                 if isTappable {
+                    // ✅ This now handles both current user (tab switch) and other users (push)
                     navigator.showProfile(userId: userId)
                 }
             }

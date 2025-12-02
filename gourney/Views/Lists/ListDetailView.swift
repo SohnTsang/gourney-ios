@@ -1,6 +1,6 @@
 // Views/Lists/ListDetailView.swift
-// ✅ Redesigned with Spotify-style centered cover image + owner info section
-// ✅ Avatar tap navigation via NavigationCoordinator
+// ✅ Using native List + swipeActions for Spotify-style smooth scrolling and swipe-to-delete
+// ✅ FIX: Proper callbacks for list updates and deletion to sync with parent view
 
 import SwiftUI
 import PhotosUI
@@ -8,7 +8,8 @@ import Combine
 
 struct ListDetailView: View {
     @State var list: RestaurantList
-    let onListUpdated: ((String, Int) -> Void)?
+    let onListUpdated: ((RestaurantList) -> Void)?  // ✅ Changed: Pass full updated list
+    let onListDeleted: ((String) -> Void)?           // ✅ NEW: Deletion callback
     let isReadOnly: Bool
     let ownerHandle: String?
     
@@ -25,8 +26,6 @@ struct ListDetailView: View {
     @State private var showAddVisitFromDetail = false
     @State private var pendingAddVisit = false
     @State private var refreshTrigger = UUID()
-    @State private var selectedCoverPhoto: PhotosPickerItem?
-    @State private var isUploadingCover = false
     @Environment(\.colorScheme) private var colorScheme
     
     private var isDefaultList: Bool {
@@ -35,16 +34,35 @@ struct ListDetailView: View {
         return list.title == wantToTryTitle || list.title == favoritesTitle
     }
     
+    // ✅ Convenience init for backward compatibility (item count only)
     init(list: RestaurantList, isReadOnly: Bool = false, ownerHandle: String? = nil, onListUpdated: ((String, Int) -> Void)? = nil) {
         self._list = State(initialValue: list)
         self.isReadOnly = isReadOnly
         self.ownerHandle = ownerHandle
+        // Convert old callback to new format
+        if let oldCallback = onListUpdated {
+            self.onListUpdated = { updatedList in
+                oldCallback(updatedList.id, updatedList.itemCount ?? 0)
+            }
+        } else {
+            self.onListUpdated = nil
+        }
+        self.onListDeleted = nil
+    }
+    
+    // ✅ NEW: Full init with both callbacks
+    init(list: RestaurantList, isReadOnly: Bool = false, ownerHandle: String? = nil,
+         onListUpdated: ((RestaurantList) -> Void)?, onListDeleted: ((String) -> Void)?) {
+        self._list = State(initialValue: list)
+        self.isReadOnly = isReadOnly
+        self.ownerHandle = ownerHandle
         self.onListUpdated = onListUpdated
+        self.onListDeleted = onListDeleted
     }
     
     var body: some View {
         VStack(spacing: 0) {
-            // DetailTopBar - show 3 dots only for owner
+            // Top Bar
             ListDetailTopBar(
                 title: list.title,
                 subtitle: isReadOnly ? ownerHandle.map { "@\($0)" } : nil,
@@ -53,167 +71,115 @@ struct ListDetailView: View {
                 onMenu: { showMenu = true }
             )
             
-            // Content
-            ZStack {
-                Color(colorScheme == .dark ? .black : .systemGroupedBackground).ignoresSafeArea()
-                
-                ScrollView {
-                    VStack(spacing: 0) {
-                        // ✅ Spotify-style Cover Image Section
-                        SpotifyCoverImageView(
-                            coverUrl: list.coverPhotoUrl,
-                            isReadOnly: isReadOnly,
-                            onUpload: { image in
-                                if let newUrl = await viewModel.uploadCover(listId: list.id, image: image) {
-                                    onListUpdated?(list.id, list.itemCount ?? 0)
-                                    return newUrl
-                                }
-                                return nil
+            // ✅ Native List for smooth scrolling + swipe actions
+            List {
+                // MARK: - Header Section
+                Section {
+                    // Cover Image
+                    SpotifyCoverImageView(
+                        coverUrl: list.coverPhotoUrl,
+                        isReadOnly: isReadOnly,
+                        onUpload: { image in
+                            if let newUrl = await viewModel.uploadCover(listId: list.id, image: image) {
+                                // ✅ Update local state and notify parent
+                                var updatedList = list
+                                // Note: We need to create a new list since coverPhotoUrl is let
+                                updatedList = RestaurantList(
+                                    id: list.id,
+                                    title: list.title,
+                                    description: list.description,
+                                    visibility: list.visibility,
+                                    itemCount: list.itemCount,
+                                    coverPhotoUrl: newUrl,
+                                    createdAt: list.createdAt,
+                                    likesCount: list.likesCount,
+                                    viewCount: list.viewCount
+                                )
+                                list = updatedList
+                                onListUpdated?(updatedList)
+                                return newUrl
                             }
-                        )
-                        
-                        // ✅ Owner Info Section (Avatar + DisplayName + Handle) - Tappable
-                        OwnerInfoSection(
-                            avatarUrl: viewModel.ownerAvatarUrl,
-                            displayName: viewModel.ownerDisplayName,
-                            ownerHandle: isReadOnly ? ownerHandle : viewModel.ownerHandle,
-                            ownerId: viewModel.ownerId,
-                            onTap: {
-                                if let ownerId = viewModel.ownerId {
-                                    navigateToUserProfile(userId: ownerId)
-                                }
-                            }
-                        )
-                        
-                        // ✅ Stats Row - Places count and Likes
-                        VStack(spacing: 12) {
-                            HStack {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "mappin.circle.fill")
-                                        .font(.system(size: 16))
-                                        .foregroundColor(GourneyColors.coral)
-                                    Text("\(viewModel.places.count)")
-                                        .font(.system(size: 16, weight: .semibold))
-                                        .foregroundColor(.primary)
-                                    Text("places")
-                                        .font(.system(size: 14))
-                                        .foregroundColor(.secondary)
-                                }
-                                
-                                Spacer()
-                                
-                                if list.visibility != "private" {
-                                    if isReadOnly {
-                                        // Visitor: tappable heart button with animation
-                                        Button {
-                                            viewModel.toggleLike(listId: list.id)
-                                        } label: {
-                                            HStack(spacing: 4) {
-                                                Image(systemName: viewModel.isLiked ? "heart.fill" : "heart")
-                                                    .font(.system(size: 20))
-                                                    .foregroundColor(viewModel.isLiked ? GourneyColors.coral : .primary)
-                                                    .scaleEffect(viewModel.likeScale)
-                                                
-                                                if viewModel.likesCount > 0 {
-                                                    Text("\(viewModel.likesCount)")
-                                                        .font(.system(size: 14, weight: .medium))
-                                                        .foregroundColor(.secondary)
-                                                }
-                                            }
-                                            .frame(minWidth: 44, minHeight: 44)
-                                        }
-                                        .buttonStyle(.plain)
-                                    } else {
-                                        // Owner: always filled heart with count
-                                        HStack(spacing: 4) {
-                                            Image(systemName: "heart.fill")
-                                                .font(.system(size: 20))
-                                                .foregroundColor(GourneyColors.coral)
-                                            
-                                            Text("\(viewModel.likesCount)")
-                                                .font(.system(size: 14, weight: .medium))
-                                                .foregroundColor(.secondary)
-                                        }
-                                        .frame(minWidth: 44, minHeight: 44)
-                                    }
-                                }
-                            }
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 12)
+                            return nil
                         }
-                        .background(colorScheme == .dark ? Color(.systemBackground) : Color.white)
-                        
-                        // Places List
-                        if viewModel.places.isEmpty && !viewModel.isLoading {
-                            EmptyPlacesView(showAddPlace: $showAddPlace, isReadOnly: isReadOnly)
-                        } else {
-                            LazyVStack(spacing: 0) {
-                                ForEach(viewModel.places) { item in
-                                    if !isReadOnly {
-                                        SwipeToDeleteRow(
-                                            item: item,
-                                            distance: item.place.map { locationManager.formattedDistance(from: $0.coordinate) } ?? nil,
-                                            onTap: {
-                                                if let place = item.place {
-                                                    selectedPlace = place
-                                                    showPlaceDetail = true
-                                                }
-                                            },
-                                            onDelete: {
-                                                guard let placeId = item.place?.id else { return }
-                                                
-                                                Task {
-                                                    await viewModel.removePlace(
-                                                        listId: list.id,
-                                                        itemId: item.id,
-                                                        placeId: placeId,
-                                                        onSuccess: { newCount in
-                                                            list.itemCount = newCount
-                                                            onListUpdated?(list.id, newCount)
-                                                        }
-                                                    )
-                                                }
-                                            }
-                                        )
-                                        .transition(.asymmetric(
-                                            insertion: .opacity,
-                                            removal: .move(edge: .leading).combined(with: .opacity)
-                                        ))
-                                    } else {
-                                        PlaceRowView(
-                                            item: PlaceRowItem(from: item),
-                                            distance: item.place.map { locationManager.formattedDistance(from: $0.coordinate) } ?? nil,
-                                            showRemoveButton: false,
-                                            onRemove: nil
-                                        )
-                                        .contentShape(Rectangle())
-                                        .onTapGesture {
-                                            if let place = item.place {
-                                                selectedPlace = place
-                                                showPlaceDetail = true
-                                            }
-                                        }
-                                    }
-                                    
-                                    if item.id != viewModel.places.last?.id {
-                                        Divider()
-                                            .padding(.leading, 90)
+                    )
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(colorScheme == .dark ? Color(.systemBackground) : Color.white)
+                    
+                    // Owner Info
+                    OwnerInfoSection(
+                        avatarUrl: viewModel.ownerAvatarUrl,
+                        displayName: viewModel.ownerDisplayName,
+                        ownerHandle: isReadOnly ? ownerHandle : viewModel.ownerHandle,
+                        ownerId: viewModel.ownerId,
+                        onTap: {
+                            if let ownerId = viewModel.ownerId {
+                                NavigationCoordinator.shared.showProfile(userId: ownerId)
+                            }
+                        }
+                    )
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(colorScheme == .dark ? Color(.systemBackground) : Color.white)
+                    
+                    // Stats Row
+                    statsRow
+                        .listRowInsets(EdgeInsets())
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(colorScheme == .dark ? Color(.systemBackground) : Color.white)
+                }
+                
+                // MARK: - Places Section
+                Section {
+                    if viewModel.places.isEmpty && !viewModel.isLoading {
+                        EmptyPlacesView(showAddPlace: $showAddPlace, isReadOnly: isReadOnly)
+                            .listRowInsets(EdgeInsets())
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(colorScheme == .dark ? Color(.systemBackground) : Color.white)
+                    } else {
+                        ForEach(viewModel.places) { item in
+                            PlaceRowView(
+                                item: PlaceRowItem(from: item),
+                                distance: item.place.map { locationManager.formattedDistance(from: $0.coordinate) } ?? nil,
+                                showRemoveButton: false,
+                                onRemove: nil
+                            )
+                            .listRowInsets(EdgeInsets())
+                            .listRowBackground(colorScheme == .dark ? Color(.systemBackground) : Color.white)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                if let place = item.place {
+                                    selectedPlace = place
+                                    showPlaceDetail = true
+                                }
+                            }
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                if !isReadOnly {
+                                    Button(role: .destructive) {
+                                        deletePlace(item: item)
+                                    } label: {
+                                        Image(systemName: "trash.fill")
                                     }
                                 }
                             }
-                            .background(colorScheme == .dark ? Color(.systemBackground) : Color.white)
-                            .animation(.spring(response: 0.35, dampingFraction: 0.75), value: viewModel.places.count)
                         }
                     }
                 }
-                
-                if viewModel.isLoading {
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(colorScheme == .dark ? Color(.systemBackground) : Color.white)
+            .refreshable {
+                await viewModel.loadPlaces(listId: list.id)
+            }
+            .overlay {
+                if viewModel.isLoading && viewModel.places.isEmpty {
                     ProgressView()
                         .tint(GourneyColors.coral)
                 }
             }
         }
-        .background(colorScheme == .dark ? Color.black : Color.white)
+        .background(colorScheme == .dark ? Color(.systemBackground) : Color.white)
         .navigationBarHidden(true)
         .task {
             await viewModel.loadPlaces(listId: list.id)
@@ -273,12 +239,8 @@ struct ListDetailView: View {
         .sheet(isPresented: $showMenu) {
             ListDetailMenuSheet(
                 isDefaultList: isDefaultList,
-                onSettings: {
-                    showSettings = true
-                },
-                onDelete: {
-                    showDeleteAlert = true
-                }
+                onSettings: { showSettings = true },
+                onDelete: { showDeleteAlert = true }
             )
         }
         .overlay {
@@ -287,8 +249,11 @@ struct ListDetailView: View {
                     list: list,
                     isPresented: $showSettings,
                     onSave: { updatedList in
+                        // ✅ Update local state
                         list = updatedList
-                        onListUpdated?(list.id, list.itemCount ?? 0)
+                        // ✅ Notify parent immediately with full updated list
+                        onListUpdated?(updatedList)
+                        print("✅ [ListDetail] Settings saved, notifying parent: \(updatedList.title)")
                     }
                 )
             }
@@ -299,47 +264,106 @@ struct ListDetailView: View {
             message: "This action cannot be undone.",
             confirmTitle: "Delete"
         ) {
-            Task {
-                await deleteList()
-            }
+            Task { await deleteList() }
         }
     }
     
-    // MARK: - Navigate to User Profile
+    // MARK: - Stats Row
     
-    private func navigateToUserProfile(userId: String) {
-        // ✅ Use NavigationCoordinator for centralized navigation
-        NavigationCoordinator.shared.showProfile(userId: userId)
+    private var statsRow: some View {
+        HStack {
+            HStack(spacing: 6) {
+                Image(systemName: "mappin.circle.fill")
+                    .font(.system(size: 16))
+                    .foregroundColor(GourneyColors.coral)
+                Text("\(viewModel.places.count)")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.primary)
+                Text("places")
+                    .font(.system(size: 14))
+                    .foregroundColor(.secondary)
+            }
+            
+            Spacer()
+            
+            if list.visibility != "private" {
+                if isReadOnly {
+                    Button {
+                        viewModel.toggleLike(listId: list.id)
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: viewModel.isLiked ? "heart.fill" : "heart")
+                                .font(.system(size: 20))
+                                .foregroundColor(viewModel.isLiked ? GourneyColors.coral : .primary)
+                                .scaleEffect(viewModel.likeScale)
+                            
+                            if viewModel.likesCount > 0 {
+                                Text("\(viewModel.likesCount)")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .frame(minWidth: 44, minHeight: 44)
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    HStack(spacing: 4) {
+                        Image(systemName: "heart.fill")
+                            .font(.system(size: 20))
+                            .foregroundColor(GourneyColors.coral)
+                        Text("\(viewModel.likesCount)")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(.secondary)
+                    }
+                    .frame(minWidth: 44, minHeight: 44)
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
     }
     
-    // MARK: - Delete List
+    // MARK: - Actions
+    
+    private func deletePlace(item: ListItem) {
+        guard let placeId = item.place?.id else { return }
+        Task {
+            await viewModel.removePlace(
+                listId: list.id,
+                itemId: item.id,
+                placeId: placeId,
+                onSuccess: { newCount in
+                    // ✅ Update local list and notify parent
+                    list.itemCount = newCount
+                    onListUpdated?(list)
+                }
+            )
+        }
+    }
     
     private func deleteList() async {
         isDeleting = true
+        let listId = list.id
         
         do {
-            await MainActor.run {
-                dismiss()
-            }
+            // ✅ Dismiss first for better UX
+            await MainActor.run { dismiss() }
             
-            let path = "/functions/v1/lists-delete?list_id=\(list.id)"
-            let _: EmptyResponse = try await SupabaseClient.shared.delete(
-                path: path,
-                requiresAuth: true
-            )
+            let path = "/functions/v1/lists-delete?list_id=\(listId)"
+            let _: EmptyResponse = try await SupabaseClient.shared.delete(path: path, requiresAuth: true)
             
+            // ✅ Notify parent about deletion
             await MainActor.run {
-                onListUpdated?(list.id, 0)
+                onListDeleted?(listId)
                 isDeleting = false
             }
+            
+            print("✅ [ListDetail] List deleted: \(listId)")
         } catch {
             print("❌ [ListDetail] Delete error: \(error)")
-            await MainActor.run {
-                isDeleting = false
-            }
+            await MainActor.run { isDeleting = false }
         }
     }
-    
 }
 
 // MARK: - Owner Info Section
@@ -347,7 +371,7 @@ struct ListDetailView: View {
 struct OwnerInfoSection: View {
     let avatarUrl: String?
     let displayName: String?
-    let ownerHandle: String?  // ✅ Renamed from 'handle' to 'ownerHandle'
+    let ownerHandle: String?
     let ownerId: String?
     var onTap: (() -> Void)? = nil
     
@@ -358,17 +382,14 @@ struct OwnerInfoSection: View {
             onTap?()
         } label: {
             HStack(spacing: 10) {
-                // Avatar - Pass ownerId for tappable navigation
                 AvatarView(url: avatarUrl, size: 40, userId: ownerId)
                 
-                // Display Name + Handle
                 VStack(alignment: .leading, spacing: 2) {
                     if let displayName = displayName, !displayName.isEmpty {
                         Text(displayName)
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundColor(.primary)
                     }
-                    
                     if let ownerHandle = ownerHandle {
                         Text("@\(ownerHandle)")
                             .font(.system(size: 13))
@@ -386,7 +407,6 @@ struct OwnerInfoSection: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
-            .background(colorScheme == .dark ? Color(.systemBackground) : Color.white)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -394,7 +414,7 @@ struct OwnerInfoSection: View {
     }
 }
 
-// MARK: - Spotify-style Cover Image View (Centered Square)
+// MARK: - Spotify-style Cover Image View
 
 struct SpotifyCoverImageView: View {
     let coverUrl: String?
@@ -404,12 +424,11 @@ struct SpotifyCoverImageView: View {
     @State private var selectedItem: PhotosPickerItem?
     @State private var isUploading = false
     @State private var currentCoverUrl: String?
+    @Environment(\.colorScheme) private var colorScheme
     
     var body: some View {
         VStack(spacing: 0) {
-            // ✅ Centered square cover image area
             ZStack {
-                // Square cover image
                 ZStack(alignment: .bottomTrailing) {
                     if let url = currentCoverUrl ?? coverUrl {
                         AsyncImage(url: URL(string: url)) { phase in
@@ -425,8 +444,7 @@ struct SpotifyCoverImageView: View {
                             case .empty:
                                 ZStack {
                                     placeholderView
-                                    ProgressView()
-                                        .tint(GourneyColors.coral.opacity(0.6))
+                                    ProgressView().tint(GourneyColors.coral.opacity(0.6))
                                 }
                             @unknown default:
                                 placeholderView
@@ -436,7 +454,6 @@ struct SpotifyCoverImageView: View {
                         placeholderView
                     }
                     
-                    // ✅ Change photo button in bottom right
                     if !isReadOnly {
                         PhotosPicker(selection: $selectedItem, matching: .images) {
                             Image(systemName: "camera.fill")
@@ -454,17 +471,15 @@ struct SpotifyCoverImageView: View {
                         .padding(12)
                     }
                 }
-                .frame(width: 200, height: 200)  // ✅ Fixed square size
+                .frame(width: 200, height: 200)
                 .background(Color.gray.opacity(0.1))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
                 
-                // Upload overlay
                 if isUploading {
                     RoundedRectangle(cornerRadius: 8)
                         .fill(Color.black.opacity(0.5))
                         .frame(width: 200, height: 200)
-                    
                     ProgressView()
                         .progressViewStyle(CircularProgressViewStyle(tint: .white))
                         .scaleEffect(1.2)
@@ -473,13 +488,11 @@ struct SpotifyCoverImageView: View {
             .padding(.vertical, 24)
         }
         .frame(maxWidth: .infinity)
-        .background(Color(UIColor.systemGroupedBackground))
         .onChange(of: selectedItem) { _, newItem in
             Task {
                 if let data = try? await newItem?.loadTransferable(type: Data.self),
                    let image = UIImage(data: data) {
                     isUploading = true
-                    
                     if let newUrl = await onUpload(image) {
                         await MainActor.run {
                             withAnimation(.easeInOut(duration: 0.3)) {
@@ -487,31 +500,22 @@ struct SpotifyCoverImageView: View {
                             }
                         }
                     }
-                    
                     isUploading = false
                     selectedItem = nil
                 }
             }
         }
-        .onAppear {
-            currentCoverUrl = coverUrl
-        }
-        .onChange(of: coverUrl) { _, newUrl in
-            currentCoverUrl = newUrl
-        }
+        .onAppear { currentCoverUrl = coverUrl }
+        .onChange(of: coverUrl) { _, newUrl in currentCoverUrl = newUrl }
     }
     
     private var placeholderView: some View {
         ZStack {
             LinearGradient(
-                colors: [
-                    GourneyColors.coral.opacity(0.2),
-                    GourneyColors.coral.opacity(0.1)
-                ],
+                colors: [GourneyColors.coral.opacity(0.2), GourneyColors.coral.opacity(0.1)],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
-            
             Image(systemName: "photo")
                 .font(.system(size: 40))
                 .foregroundColor(GourneyColors.coral.opacity(0.4))
@@ -530,13 +534,8 @@ struct ListDetailTopBar: View {
     
     @Environment(\.colorScheme) private var colorScheme
     
-    private var backgroundColor: Color {
-        colorScheme == .dark ? Color.black : Color.white
-    }
-    
     var body: some View {
         HStack {
-            // Left: Back button
             Button(action: onBack) {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 18, weight: .medium))
@@ -547,13 +546,11 @@ struct ListDetailTopBar: View {
             
             Spacer()
             
-            // Center: Title + subtitle
             VStack(spacing: 2) {
                 Text(title)
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundColor(.primary)
                     .lineLimit(1)
-                
                 if let subtitle = subtitle {
                     Text(subtitle)
                         .font(.system(size: 13))
@@ -563,7 +560,6 @@ struct ListDetailTopBar: View {
             
             Spacer()
             
-            // Right: Menu button or spacer
             if showMenu {
                 Button(action: onMenu) {
                     Image(systemName: "ellipsis")
@@ -573,17 +569,16 @@ struct ListDetailTopBar: View {
                         .contentShape(Rectangle())
                 }
             } else {
-                Color.clear
-                    .frame(width: 44, height: 44)
+                Color.clear.frame(width: 44, height: 44)
             }
         }
         .padding(.horizontal, 8)
         .frame(height: 44)
-        .background(backgroundColor)
+        .background(colorScheme == .dark ? Color(.systemBackground) : Color.white)
     }
 }
 
-// MARK: - List Detail Menu Sheet (Slide up)
+// MARK: - List Detail Menu Sheet
 
 struct ListDetailMenuSheet: View {
     let isDefaultList: Bool
@@ -601,23 +596,19 @@ struct ListDetailMenuSheet: View {
                 .padding(.bottom, 20)
             
             VStack(spacing: 0) {
-                // Settings
                 menuRow(icon: "gear", title: "Settings") {
                     dismiss()
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { onSettings() }
                 }
                 
-                // Delete (only for custom lists)
                 if !isDefaultList {
                     Divider().padding(.leading, 56)
-                    
                     menuRow(icon: "trash", title: "Delete List", isDestructive: true) {
                         dismiss()
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { onDelete() }
                     }
                 }
             }
-            
             Spacer()
         }
         .presentationDetents([.height(isDefaultList ? 120 : 180)])
@@ -632,13 +623,10 @@ struct ListDetailMenuSheet: View {
                     .font(.system(size: 20))
                     .foregroundColor(isDestructive ? .red : .primary)
                     .frame(width: 32)
-                
                 Text(title)
                     .font(.system(size: 16, weight: .medium))
                     .foregroundColor(isDestructive ? .red : .primary)
-                
                 Spacer()
-                
                 Image(systemName: "chevron.right")
                     .font(.system(size: 14, weight: .medium))
                     .foregroundColor(Color(.systemGray3))
@@ -672,7 +660,6 @@ struct EmptyPlacesView: View {
                     Text("This list is empty")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
                 } else {
                     Text("Save places from discover or feed\nto add them to this list")
                         .font(.subheadline)
@@ -688,7 +675,6 @@ struct EmptyPlacesView: View {
     }
 }
 
-
 struct AddPlaceToListSheet: View {
     let listId: String
     @ObservedObject var viewModel: ListDetailViewModel
@@ -700,11 +686,8 @@ struct AddPlaceToListSheet: View {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 60))
                     .foregroundColor(GourneyColors.coral.opacity(0.3))
-                
                 Text("Search Places")
                     .font(.system(size: 20, weight: .semibold))
-                    .foregroundColor(.primary)
-                
                 Text("Coming soon")
                     .font(.system(size: 14))
                     .foregroundColor(.secondary)
@@ -722,80 +705,6 @@ struct AddPlaceToListSheet: View {
     }
 }
 
-
-// MARK: - Swipe to Delete Row
-
-struct SwipeToDeleteRow: View {
-    let item: ListItem
-    let distance: String?
-    let onTap: () -> Void
-    let onDelete: () -> Void
-    
-    @State private var offset: CGFloat = 0
-    @State private var showingDelete = false
-    
-    private let deleteThreshold: CGFloat = -80
-    
-    var body: some View {
-        ZStack(alignment: .trailing) {
-            // Delete background
-            HStack {
-                Spacer()
-                Button(action: {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                        onDelete()
-                    }
-                }) {
-                    Image(systemName: "trash.fill")
-                        .font(.system(size: 20))
-                        .foregroundColor(.white)
-                        .frame(width: 80, height: 72)
-                        .background(Color.red)
-                }
-            }
-            
-            // Content
-            PlaceRowView(
-                item: PlaceRowItem(from: item),
-                distance: distance,
-                showRemoveButton: false,
-                onRemove: nil
-            )
-            .background(Color(UIColor.systemBackground))
-            .offset(x: offset)
-            .gesture(
-                DragGesture()
-                    .onChanged { value in
-                        if value.translation.width < 0 {
-                            offset = value.translation.width
-                        }
-                    }
-                    .onEnded { value in
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                            if value.translation.width < deleteThreshold {
-                                offset = deleteThreshold
-                                showingDelete = true
-                            } else {
-                                offset = 0
-                                showingDelete = false
-                            }
-                        }
-                    }
-            )
-            .onTapGesture {
-                if showingDelete {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                        offset = 0
-                        showingDelete = false
-                    }
-                } else {
-                    onTap()
-                }
-            }
-        }
-    }
-}
-
 // MARK: - ViewModel
 
 @MainActor
@@ -807,7 +716,6 @@ class ListDetailViewModel: ObservableObject {
     @Published var likesCount: Int = 0
     @Published var likeScale: CGFloat = 1.0
     
-    // ✅ Owner info from API
     @Published var ownerId: String?
     @Published var ownerHandle: String?
     @Published var ownerDisplayName: String?
@@ -824,16 +732,11 @@ class ListDetailViewModel: ObservableObject {
         likeDebounceTask?.cancel()
     }
     
-    // MARK: - Like Toggle
-    
     func toggleLike(listId: String) {
         let newState = !isLiked
-        
-        // Optimistic UI update
         isLiked = newState
         likesCount += newState ? 1 : -1
         
-        // Animate heart
         withAnimation(.spring(response: 0.3, dampingFraction: 0.5)) {
             likeScale = 1.3
         }
@@ -843,7 +746,6 @@ class ListDetailViewModel: ObservableObject {
             }
         }
         
-        // Debounce API call
         likeDebounceTask?.cancel()
         likeDebounceTask = Task {
             try? await Task.sleep(nanoseconds: 300_000_000)
@@ -858,28 +760,21 @@ class ListDetailViewModel: ObservableObject {
                 "list_id": listId,
                 "action": desiredState ? "like" : "unlike"
             ]
-            
             let response: ListLikeResponse = try await client.post(
                 path: "/functions/v1/lists-like",
                 body: body,
                 requiresAuth: true
             )
-            
             guard !Task.isCancelled else { return }
-            
-            let currentState = isLiked
             
             if response.liked == desiredState {
                 likesCount = response.likeCount
                 likeStatus = (hasLiked: response.liked, likesCount: response.likeCount)
-            } else if currentState == desiredState {
-                print("⚠️ [ListLike] Server mismatch, retrying to sync...")
+            } else if isLiked == desiredState {
                 await syncLikeWithServer(listId: listId, desiredState: desiredState)
                 return
             }
-            
             print("✅ [ListLike] Synced - liked: \(response.liked), count: \(response.likeCount)")
-            
         } catch {
             guard !Task.isCancelled else { return }
             print("❌ [ListLike] Error: \(error)")
@@ -888,73 +783,53 @@ class ListDetailViewModel: ObservableObject {
     
     func loadPlaces(listId: String, completion: ((Bool, Int) -> Void)? = nil) async {
         loadTask?.cancel()
-        
         isLoading = true
         errorMessage = nil
         
-        await withTaskCancellationHandler {
-            await Task {
-                do {
-                    let body = ["list_id": listId]
-                    let response: ListDetailResponse = try await client.post(
-                        path: "/functions/v1/lists-get-detail",
-                        body: body,
-                        requiresAuth: true
-                    )
-                    
-                    if Task.isCancelled { return }
-                    
-                    await MainActor.run {
-                        places = response.items
-                        isLoading = false
-                        
-                        // Set like state
-                        isLiked = response.list.hasLiked
-                        likesCount = response.list.likesCount
-                        likeStatus = (hasLiked: response.list.hasLiked, likesCount: response.list.likesCount)
-                        
-                        // ✅ Set owner info from API response
-                        ownerId = response.list.ownerId
-                        ownerHandle = response.list.ownerHandle
-                        ownerDisplayName = response.list.ownerDisplayName
-                        ownerAvatarUrl = response.list.ownerAvatarUrl
-                        
-                        completion?(response.list.hasLiked, response.list.likesCount)
-                    }
-                    
-                    print("✅ [ListDetail] Loaded \(response.items.count) places")
-                    print("   👤 Owner: \(response.list.ownerDisplayName ?? "nil") (@\(response.list.ownerHandle ?? "nil"))")
-                } catch {
-                    if !Task.isCancelled {
-                        await MainActor.run {
-                            errorMessage = error.localizedDescription
-                            isLoading = false
-                            isLiked = false
-                            likesCount = 0
-                            likeStatus = (hasLiked: false, likesCount: 0)
-                            completion?(false, 0)
-                        }
-                        print("❌ [ListDetail] Load error: \(error)")
-                    }
-                }
-            }.value
-        } onCancel: { }
+        do {
+            let body = ["list_id": listId]
+            let response: ListDetailResponse = try await client.post(
+                path: "/functions/v1/lists-get-detail",
+                body: body,
+                requiresAuth: true
+            )
+            
+            if Task.isCancelled { return }
+            
+            places = response.items
+            isLoading = false
+            isLiked = response.list.hasLiked
+            likesCount = response.list.likesCount
+            likeStatus = (hasLiked: response.list.hasLiked, likesCount: response.list.likesCount)
+            ownerId = response.list.ownerId
+            ownerHandle = response.list.ownerHandle
+            ownerDisplayName = response.list.ownerDisplayName
+            ownerAvatarUrl = response.list.ownerAvatarUrl
+            
+            completion?(response.list.hasLiked, response.list.likesCount)
+            print("✅ [ListDetail] Loaded \(response.items.count) places")
+        } catch {
+            if !Task.isCancelled {
+                errorMessage = error.localizedDescription
+                isLoading = false
+                isLiked = false
+                likesCount = 0
+                likeStatus = (hasLiked: false, likesCount: 0)
+                completion?(false, 0)
+                print("❌ [ListDetail] Load error: \(error)")
+            }
+        }
     }
     
     func removePlace(listId: String, itemId: String, placeId: String, onSuccess: @escaping (Int) -> Void) async {
         let originalPlaces = places
         
-        await MainActor.run {
-            withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
-                places.removeAll { $0.id == itemId }
-            }
+        withAnimation {
+            places.removeAll { $0.id == itemId }
         }
         
         let newCount = places.count
-        
-        await MainActor.run {
-            onSuccess(newCount)
-        }
+        onSuccess(newCount)
         
         do {
             var components = URLComponents(url: URL(string: Config.supabaseURL)!.appendingPathComponent("/functions/v1/lists-remove-item"), resolvingAgainstBaseURL: true)!
@@ -990,14 +865,11 @@ class ListDetailViewModel: ObservableObject {
             }
         } catch {
             print("❌ [RemovePlace] API failed, rolling back: \(error)")
-            
-            await MainActor.run {
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
-                    places = originalPlaces
-                }
-                errorMessage = "Failed to remove item. Please try again."
-                onSuccess(originalPlaces.count)
+            withAnimation {
+                places = originalPlaces
             }
+            errorMessage = "Failed to remove item. Please try again."
+            onSuccess(originalPlaces.count)
         }
     }
     
@@ -1007,27 +879,16 @@ class ListDetailViewModel: ObservableObject {
                 throw CoverPhotoError.notAuthenticated
             }
             
-            let coverUrl = try await ListCoverPhotoUploader.shared.uploadCoverPhoto(
-                image,
-                userId: userId,
-                listId: listId
-            )
+            let coverUrl = try await ListCoverPhotoUploader.shared.uploadCoverPhoto(image, userId: userId, listId: listId)
             
             let path = "/functions/v1/lists-update?list_id=\(listId)"
             let body: [String: Any] = ["cover_photo_url": coverUrl]
-            
-            let _: RestaurantList = try await client.patch(
-                path: path,
-                body: body,
-                requiresAuth: true
-            )
+            let _: RestaurantList = try await client.patch(path: path, body: body, requiresAuth: true)
             
             print("✅ [ListDetail] Cover photo updated")
             return coverUrl
         } catch {
-            await MainActor.run {
-                errorMessage = error.localizedDescription
-            }
+            errorMessage = error.localizedDescription
             print("❌ [ListDetail] Cover upload error: \(error)")
             return nil
         }

@@ -3,6 +3,7 @@
 // Uses shared PhotoCarouselView for Instagram-style dynamic height
 // Double-tap to like (won't unlike if already liked)
 // FIX: Added notification listener for seamless visit updates
+// FIX: Comment input now shows current user's avatar
 // Avatar taps now navigate via NavigationCoordinator
 
 import SwiftUI
@@ -729,7 +730,8 @@ struct FeedDetailView: View {
             }
             
             HStack(alignment: .center, spacing: 12) {
-                AvatarView(url: nil, size: 32)
+                // ✅ FIX: Use current user's avatar instead of nil
+                AvatarView(url: AuthManager.shared.currentUser?.avatarUrl, size: 32)
                 
                 VStack(alignment: .trailing, spacing: 4) {
                     TextField("Add a comment...", text: $viewModel.commentText, axis: .vertical)

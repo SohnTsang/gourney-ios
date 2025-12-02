@@ -113,6 +113,12 @@ struct ProfileView: View {
             // Visit updates are handled via NotificationCenter
             viewModel.cleanup()
         }
+        .onReceive(NavigationCoordinator.shared.$shouldPopProfileToRoot) { shouldPop in
+            if shouldPop && isOwnProfile {
+                navigationPath = NavigationPath()
+            }
+        }
+
     }
     
     // MARK: - Top Bar (Fixed at top) - Title Always Centered

@@ -1,5 +1,6 @@
 // gourney/ViewModels/ListsViewModel.swift
 // ✅ FIXED: Load ownership pattern to prevent placeholder flash on tab switch
+// ✅ FIX: Added updateList and removeList for seamless parent-child sync
 
 import Foundation
 import Combine
@@ -82,6 +83,38 @@ class ListsViewModel: ObservableObject {
         hasLoadedFollowing = false
         hasLoadedPopular = false
         print("🧹 [Lists] Memory cleared")
+    }
+    
+    // MARK: - ✅ NEW: Update List (for settings changes)
+    
+    func updateList(_ updatedList: RestaurantList) {
+        // Update in defaultLists
+        if let index = defaultLists.firstIndex(where: { $0.id == updatedList.id }) {
+            defaultLists[index] = updatedList
+            print("✅ [ListsVM] Updated defaultList[\(index)]: \(updatedList.title)")
+        }
+        
+        // Update in customLists
+        if let index = customLists.firstIndex(where: { $0.id == updatedList.id }) {
+            customLists[index] = updatedList
+            print("✅ [ListsVM] Updated customList[\(index)]: \(updatedList.title)")
+        }
+    }
+    
+    // MARK: - ✅ NEW: Remove List (for deletions)
+    
+    func removeList(id: String) {
+        // Remove from defaultLists (shouldn't happen for default lists, but just in case)
+        if let index = defaultLists.firstIndex(where: { $0.id == id }) {
+            let removed = defaultLists.remove(at: index)
+            print("✅ [ListsVM] Removed defaultList[\(index)]: \(removed.title)")
+        }
+        
+        // Remove from customLists
+        if let index = customLists.firstIndex(where: { $0.id == id }) {
+            let removed = customLists.remove(at: index)
+            print("✅ [ListsVM] Removed customList[\(index)]: \(removed.title)")
+        }
     }
     
     // MARK: - My Lists
@@ -228,30 +261,25 @@ class ListsViewModel: ObservableObject {
                 )
             }
             
+            // Pagination
+            let startIndex = followingPage * pageSize
+            let endIndex = min(startIndex + pageSize, allFollowing.count)
+            
             if loadMore {
-                // Pagination - append
-                let startIndex = followingPage * pageSize
-                let endIndex = min(startIndex + pageSize, allFollowing.count)
-                
                 if startIndex < allFollowing.count {
                     followingLists.append(contentsOf: Array(allFollowing[startIndex..<endIndex]))
                 }
             } else {
-                // Fresh load - replace
-                followingLists = allFollowing
+                followingLists = endIndex > 0 ? Array(allFollowing[0..<endIndex]) : []
             }
             
-            hasMoreFollowing = allFollowing.count > followingLists.count
-            if !loadMore {
-                followingPage = 1
-            } else {
-                followingPage += 1
-            }
+            hasMoreFollowing = endIndex < allFollowing.count
+            followingPage += 1
             
             isLoading = false
             isLoadingMore = false
             hasLoadedFollowing = true
-            print("✅ [Lists] Loaded \(followingLists.count) following lists")
+            print("✅ [Lists] Loaded \(allFollowing.count) following lists")
         } catch {
             // ✅ Only update state if we still own the load
             guard currentLoadId == loadId else {
@@ -262,51 +290,44 @@ class ListsViewModel: ObservableObject {
             isLoading = false
             isLoadingMore = false
             hasLoadedFollowing = true  // Still mark as loaded even on error
-            print("❌ [Lists] Following lists error: \(error)")
+            print("❌ [Lists] Following load error: \(error)")
         }
     }
     
+    // MARK: - Create Default Lists
+    
     private func createDefaultListsIfNeeded() async {
-        if !defaultLists.isEmpty || !customLists.isEmpty { return }
-        
         do {
-            let body: [String: Any] = [:]
-            let response: ListsGetResponse = try await client.post(
-                path: "/functions/v1/lists-get",
-                body: body,
+            let _: EmptyResponse = try await client.post(
+                path: "/functions/v1/lists-create-defaults",
+                body: [:],
                 requiresAuth: true
             )
-            
-            let wantToTryTitle = NSLocalizedString("lists.default.want_to_try", comment: "")
-            let favoritesTitle = NSLocalizedString("lists.default.favorites", comment: "")
-            
-            let hasWantToTry = response.lists.contains { $0.title == wantToTryTitle }
-            let hasFavorites = response.lists.contains { $0.title == favoritesTitle }
-            
-            if hasWantToTry && hasFavorites { return }
-            
-            print("⚠️ [Lists] Default lists missing - should be created by database trigger")
         } catch {
-            print("❌ [Lists] Check defaults error: \(error)")
+            print("⚠️ [Lists] Default lists creation: \(error.localizedDescription)")
         }
     }
+    
+    // MARK: - Delete List
     
     func deleteList(listId: String) async -> Bool {
         do {
-            // Build URL with query parameter
-            let path = "/functions/v1/lists-delete?list_id=\(listId)"
+            // ✅ Optimistic removal from UI first
+            removeList(id: listId)
             
+            let path = "/functions/v1/lists-delete?list_id=\(listId)"
             let _: EmptyResponse = try await client.delete(
                 path: path,
                 requiresAuth: true
             )
             
-            customLists.removeAll { $0.id == listId }
-            print("✅ [Lists] Deleted list: \(listId)")
+            print("✅ [Lists] Deleted: \(listId)")
             return true
         } catch {
+            // ✅ Reload lists on failure to restore state
             errorMessage = error.localizedDescription
             print("❌ [Lists] Delete error: \(error)")
+            await loadLists()
             return false
         }
     }
@@ -352,13 +373,8 @@ class ListsViewModel: ObservableObject {
                 requiresAuth: true
             )
             
-            // Update in memory
-            if let index = defaultLists.firstIndex(where: { $0.id == listId }) {
-                defaultLists[index] = updatedList
-            }
-            if let index = customLists.firstIndex(where: { $0.id == listId }) {
-                customLists[index] = updatedList
-            }
+            // Update in memory using the new method
+            updateList(updatedList)
             
             print("✅ [Lists] Updated cover photo: \(listId)")
             return true
@@ -511,15 +527,9 @@ extension ListsViewModel {
                 likesCount: response.list.likesCount
             )
             
-            if let index = defaultLists.firstIndex(where: { $0.id == listId }) {
-                defaultLists[index] = updatedList
-                print("✅ [Lists] Refreshed defaultList[\(index)] - cover: \(updatedList.coverPhotoUrl ?? "nil")")
-            }
-            
-            if let index = customLists.firstIndex(where: { $0.id == listId }) {
-                customLists[index] = updatedList
-                print("✅ [Lists] Refreshed customList[\(index)] - cover: \(updatedList.coverPhotoUrl ?? "nil")")
-            }
+            // Use the new updateList method
+            updateList(updatedList)
+            print("✅ [Lists] Refreshed list: \(updatedList.title)")
         } catch {
             print("❌ [Lists] Refresh single list error: \(error)")
         }

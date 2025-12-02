@@ -1,7 +1,7 @@
 // Views/MainTabView.swift
 // Main tab bar with Gourney design system
 // Tab order: Feed, Discover, Add, Rank, Profile (5 tabs)
-// ✅ Centralized profile navigation via NavigationCoordinator (fullScreenCover)
+// ✅ FIX: Observes NavigationCoordinator to switch to Profile tab when own avatar is tapped
 
 import SwiftUI
 import Combine
@@ -30,6 +30,9 @@ class AvatarPreviewState: ObservableObject {
 struct MainTabView: View {
     @State private var selectedTab = 0
     @StateObject private var avatarPreviewState = AvatarPreviewState.shared
+    
+    // ✅ NEW: Observe NavigationCoordinator for tab switching
+    @ObservedObject private var navigator = NavigationCoordinator.shared
     
     // Gourney coral color
     private let coralColor = Color(red: 1.0, green: 0.4, blue: 0.4)
@@ -97,9 +100,14 @@ struct MainTabView: View {
         .onAppear {
             configureTabBarAppearance()
         }
-        // NOTE: Profile navigation is handled via NavigationCoordinator in each view's NavigationStack
-        // (e.g., FeedView has .navigationDestination(item: $navigator.navigateToProfileUserId))
-        // Do NOT add .sheet() or .fullScreenCover() here to avoid duplicate presentations
+        // ✅ NEW: Listen for tab switch requests from NavigationCoordinator
+        .onReceive(navigator.$shouldSwitchToProfileTab) { shouldSwitch in
+            if shouldSwitch {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    selectedTab = 4  // Profile tab
+                }
+            }
+        }
     }
     
     private func configureTabBarAppearance() {

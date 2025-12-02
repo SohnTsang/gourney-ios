@@ -1,6 +1,7 @@
 // Views/Rank/RankView.swift
 // ✅ Production-grade with Instagram-style avatar loading
 // ✅ Fixed: Seamless tab switching with proper loading states
+// ✅ Updated: Location selector now uses slide-up sheet (same as ListDetailView)
 // Avatar taps now navigate via NavigationCoordinator
 
 import SwiftUI
@@ -8,7 +9,7 @@ import SwiftUI
 struct RankView: View {
     @StateObject private var viewModel = RankViewModel()
     @Environment(\.colorScheme) private var colorScheme
-    @State private var showLocationDropdown = false
+    @State private var showLocationSheet = false
     
     var body: some View {
         ZStack {
@@ -53,23 +54,24 @@ struct RankView: View {
                     }
                 }
             }
-            
-            if showLocationDropdown {
-                LocationDropdownOverlay(
-                    selectedScope: $viewModel.selectedScope,
-                    homeCity: viewModel.homeCity,
-                    homeCountry: viewModel.homeCountry,
-                    currentCity: viewModel.currentCity,
-                    currentCountry: viewModel.currentCountry,
-                    isPresented: $showLocationDropdown,
-                    onSelect: {
-                        viewModel.clearAndReload()
-                    }
-                )
-            }
         }
         .onAppear { viewModel.onAppear() }
         .onDisappear { viewModel.onDisappear() }
+        .sheet(isPresented: $showLocationSheet) {
+            LocationMenuSheet(
+                selectedScope: viewModel.selectedScope,
+                homeCity: viewModel.homeCity,
+                homeCountry: viewModel.homeCountry,
+                currentCity: viewModel.currentCity,
+                currentCountry: viewModel.currentCountry,
+                canSelectHome: viewModel.canSelectHome,
+                canSelectCurrent: viewModel.canSelectCurrent,
+                onSelect: { scope in
+                    viewModel.selectedScope = scope
+                    viewModel.clearAndReload()
+                }
+            )
+        }
     }
     
     // MARK: - Navigation Bar
@@ -83,9 +85,7 @@ struct RankView: View {
             Spacer()
             
             Button {
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                    showLocationDropdown.toggle()
-                }
+                showLocationSheet = true
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: viewModel.displayLocationIcon)
@@ -97,7 +97,6 @@ struct RankView: View {
                     
                     Image(systemName: "chevron.down")
                         .font(.system(size: 10, weight: .bold))
-                        .rotationEffect(.degrees(showLocationDropdown ? 180 : 0))
                 }
                 .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
             }
@@ -213,27 +212,29 @@ struct RankView: View {
                         .font(.system(size: 14, weight: .bold))
                         .foregroundColor(.white)
                 } else {
-                    Text("N/A")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundColor(.gray)
+                    Text("—")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundColor(.white)
                 }
             }
             
             VStack(alignment: .leading, spacing: 2) {
                 Text("Your Rank")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(hasRank ? .secondary : .secondary.opacity(0.6))
+                    .font(.system(size: 13))
+                    .foregroundColor(.secondary)
                 
-                Text(scopeLabel)
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary.opacity(0.8))
+                Text("\(points) points")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(.primary)
             }
             
             Spacer()
             
-            Text("\(points) pts")
-                .font(.system(size: 18, weight: .bold))
-                .foregroundColor(hasRank ? Color(red: 1.0, green: 0.4, blue: 0.4) : .gray)
+            if !hasRank {
+                Text("Not ranked yet")
+                    .font(.system(size: 13))
+                    .foregroundColor(.secondary)
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
@@ -247,183 +248,171 @@ struct RankView: View {
     }
     
     private var currentPoints: Int {
-        guard let rank = viewModel.userRank else { return 0 }
+        guard let userRank = viewModel.userRank else { return 0 }
         switch viewModel.selectedTimeframe {
-        case .weekly: return rank.weeklyPoints
-        case .monthly: return rank.monthlyPoints ?? 0
-        case .allTime: return rank.lifetimePoints
-        }
-    }
-    
-    private var scopeLabel: String {
-        switch viewModel.selectedScope {
-        case .home: return "in \(viewModel.homeCity ?? "Home")"
-        case .current: return "in \(viewModel.currentCity ?? "Current")"
-        case .global: return "Worldwide"
+        case .weekly: return userRank.weeklyPoints
+        case .monthly: return userRank.monthlyPoints ?? 0
+        case .allTime: return userRank.lifetimePoints
         }
     }
     
     // MARK: - Error View
     
-    private func errorView(_ error: String) -> some View {
-        VStack(spacing: 20) {
-            Spacer()
+    private func errorView(_ message: String) -> some View {
+        VStack(spacing: 16) {
             Image(systemName: "exclamationmark.triangle")
                 .font(.system(size: 48))
                 .foregroundColor(.orange)
-            Text(error)
-                .font(.system(size: 14))
+            
+            Text(message)
+                .font(.system(size: 15))
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
+            
             Button {
-                Task { await viewModel.loadLeaderboard() }
+                viewModel.clearAndReload()
             } label: {
                 Text("Retry")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundColor(.white)
-                    .frame(width: 140, height: 44)
-                    .background(Color(red: 1.0, green: 0.4, blue: 0.4))
-                    .clipShape(Capsule())
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 20)
+                            .fill(Color(red: 1.0, green: 0.4, blue: 0.4))
+                    )
             }
-            Spacer()
         }
-        .frame(maxWidth: .infinity)
-        .frame(height: UIScreen.main.bounds.height * 0.5)
+        .padding(.top, 60)
     }
     
     // MARK: - Empty View
     
     private var emptyView: some View {
-        VStack(spacing: 20) {
-            Spacer()
+        VStack(spacing: 16) {
             Image(systemName: "trophy")
-                .font(.system(size: 64))
-                .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4).opacity(0.3))
-            VStack(spacing: 8) {
-                Text("No rankings yet")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundColor(.primary)
-                Text(emptyStateSubtitle)
-                    .font(.system(size: 14))
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 40)
-            }
-            Spacer()
+                .font(.system(size: 48))
+                .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4).opacity(0.5))
+            
+            Text("No rankings yet")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundColor(.primary)
+            
+            Text("Be the first to earn points\nin this area!")
+                .font(.system(size: 15))
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
         }
-        .frame(maxWidth: .infinity)
-        .frame(height: UIScreen.main.bounds.height * 0.5)
-    }
-    
-    private var emptyStateSubtitle: String {
-        switch viewModel.selectedScope {
-        case .home: return "No one in your home city has earned points yet. Be the first!"
-        case .current: return "No one in your current city has earned points yet. Be the first!"
-        case .global: return "Be the first to earn points and claim the top spot!"
-        }
+        .padding(.top, 60)
     }
 }
 
-// MARK: - Location Dropdown Overlay
+// MARK: - Location Menu Sheet (Slide up - same pattern as ListDetailMenuSheet)
 
-struct LocationDropdownOverlay: View {
-    @Binding var selectedScope: LocationScope
+struct LocationMenuSheet: View {
+    let selectedScope: LocationScope
     let homeCity: String?
     let homeCountry: String?
     let currentCity: String?
     let currentCountry: String?
-    @Binding var isPresented: Bool
-    let onSelect: () -> Void
-    @Environment(\.colorScheme) private var colorScheme
+    let canSelectHome: Bool
+    let canSelectCurrent: Bool
+    let onSelect: (LocationScope) -> Void
+    
+    @Environment(\.dismiss) private var dismiss
+    
+    private var sheetHeight: CGFloat {
+        // Base height for header + 3 options
+        180
+    }
     
     var body: some View {
-        ZStack(alignment: .topTrailing) {
-            Color.black.opacity(0.001)
-                .ignoresSafeArea()
-                .onTapGesture {
-                    withAnimation(.easeOut(duration: 0.2)) { isPresented = false }
-                }
+        VStack(spacing: 0) {
+            // Drag indicator
+            Capsule()
+                .fill(Color(.systemGray3))
+                .frame(width: 36, height: 5)
+                .padding(.top, 8)
+                .padding(.bottom, 20)
             
             VStack(spacing: 0) {
-                if homeCity != nil {
-                    LocationOption(
-                        icon: "house.fill",
-                        title: "Home",
-                        subtitle: formatLocation(city: homeCity, country: homeCountry),
-                        isSelected: selectedScope == .home,
-                        action: { selectedScope = .home; dismissAndSelect() }
-                    )
-                }
+                // Home option
+                locationRow(
+                    scope: .home,
+                    title: "Home",
+                    subtitle: formatLocation(city: homeCity, country: homeCountry),
+                    icon: "house.fill",
+                    isSelected: selectedScope == .home,
+                    isDisabled: !canSelectHome
+                )
                 
-                if currentCity != nil {
-                    if homeCity != nil { Divider().padding(.leading, 16) }
-                    LocationOption(
-                        icon: "location.fill",
-                        title: "Current",
-                        subtitle: formatLocation(city: currentCity, country: currentCountry),
-                        isSelected: selectedScope == .current,
-                        action: { selectedScope = .current; dismissAndSelect() }
-                    )
-                }
+                Divider().padding(.leading, 56)
                 
-                if homeCity != nil || currentCity != nil { Divider().padding(.leading, 16) }
+                // Current location option
+                locationRow(
+                    scope: .current,
+                    title: "Current Location",
+                    subtitle: formatLocation(city: currentCity, country: currentCountry),
+                    icon: "location.fill",
+                    isSelected: selectedScope == .current,
+                    isDisabled: !canSelectCurrent
+                )
                 
-                LocationOption(
-                    icon: "globe.americas.fill",
+                Divider().padding(.leading, 56)
+                
+                // Global option
+                locationRow(
+                    scope: .global,
                     title: "Global",
                     subtitle: "Worldwide rankings",
+                    icon: "globe.americas.fill",
                     isSelected: selectedScope == .global,
-                    action: { selectedScope = .global; dismissAndSelect() }
+                    isDisabled: false
                 )
             }
-            .background(colorScheme == .dark ? Color(.systemGray6) : Color.white)
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-            .shadow(color: .black.opacity(0.15), radius: 12, y: 4)
-            .frame(width: 240)
-            .padding(.trailing, 20)
-            .padding(.top, 60)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-            .transition(.scale(scale: 0.9, anchor: .topTrailing).combined(with: .opacity))
+            
+            Spacer()
         }
+        .presentationDetents([.height(sheetHeight)])
+        .presentationDragIndicator(.hidden)
+        .presentationCornerRadius(20)
     }
     
-    private func formatLocation(city: String?, country: String?) -> String {
-        guard let city = city else { return "Not set" }
-        return country != nil ? "\(city), \(country!)" : city
-    }
-    
-    private func dismissAndSelect() {
-        withAnimation(.easeOut(duration: 0.2)) { isPresented = false }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { onSelect() }
-    }
-}
-
-// MARK: - Location Option
-
-struct LocationOption: View {
-    let icon: String
-    let title: String
-    let subtitle: String
-    let isSelected: Bool
-    let action: () -> Void
-    
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 12) {
+    private func locationRow(
+        scope: LocationScope,
+        title: String,
+        subtitle: String?,
+        icon: String,
+        isSelected: Bool,
+        isDisabled: Bool
+    ) -> some View {
+        Button {
+            guard !isDisabled else { return }
+            dismiss()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                onSelect(scope)
+            }
+        } label: {
+            HStack(spacing: 14) {
                 Image(systemName: icon)
-                    .font(.system(size: 16))
-                    .foregroundColor(isSelected ? Color(red: 1.0, green: 0.4, blue: 0.4) : .secondary)
-                    .frame(width: 24)
+                    .font(.system(size: 20))
+                    .foregroundColor(isDisabled ? .gray : (isSelected ? Color(red: 1.0, green: 0.4, blue: 0.4) : .primary))
+                    .frame(width: 32)
                 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundColor(.primary)
-                    Text(subtitle)
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(isDisabled ? .gray : .primary)
+                    
+                    if let subtitle = subtitle {
+                        Text(subtitle)
+                            .font(.system(size: 13))
+                            .foregroundColor(isDisabled ? .gray.opacity(0.6) : .secondary)
+                    } else if isDisabled {
+                        Text(scope == .home ? "Set in profile" : "Location unavailable")
+                            .font(.system(size: 13))
+                            .foregroundColor(.gray.opacity(0.6))
+                    }
                 }
                 
                 Spacer()
@@ -434,11 +423,17 @@ struct LocationOption: View {
                         .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .disabled(isDisabled)
+    }
+    
+    private func formatLocation(city: String?, country: String?) -> String? {
+        guard let city = city else { return nil }
+        return country != nil ? "\(city), \(country!)" : city
     }
 }
 
@@ -448,7 +443,7 @@ struct PodiumCard: View {
     let entry: LeaderboardEntry
     let position: Int
     var selectedTimeframe: RankTimeframe = .allTime
-    var currentUserId: String? = nil
+    let currentUserId: String?
     @Environment(\.colorScheme) private var colorScheme
     @ObservedObject private var navigator = NavigationCoordinator.shared
     
