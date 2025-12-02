@@ -1,6 +1,8 @@
 // Views/Feed/FeedCardView.swift
 // Elegant feed card using shared PhotoCarouselView
 // Instagram-style dynamic photo height
+// Double-tap to like (won't unlike if already liked)
+// Avatar taps now navigate via NavigationCoordinator
 
 import SwiftUI
 
@@ -10,10 +12,10 @@ struct FeedCardView: View {
     var onCommentTap: (() -> Void)?
     var onSaveTap: (() -> Void)?
     var onShareTap: (() -> Void)?
-    var onUserTap: (() -> Void)?
     var onPlaceTap: (() -> Void)?
     
     @State private var currentPhotoIndex = 0
+    @State private var showLikeAnimation = false
     @Binding var showMenuForId: String?
     
     @Environment(\.colorScheme) private var colorScheme
@@ -38,7 +40,8 @@ struct FeedCardView: View {
         ZStack {
             PhotoCarouselView(
                 photos: item.photos,
-                currentIndex: $currentPhotoIndex
+                currentIndex: $currentPhotoIndex,
+                onPhotoTap: nil  // Remove single-tap preview
             )
             
             // Gradient overlay
@@ -49,25 +52,27 @@ struct FeedCardView: View {
             )
             .allowsHitTesting(false)
             
-            // User info - top left
+            // User info - top left (tappable avatar + username)
             VStack {
                 HStack {
-                    Button { onUserTap?() } label: {
-                        HStack(spacing: 10) {
-                            AvatarView(url: item.user.avatarUrl, size: 36)
+                    HStack(spacing: 10) {
+                        // Avatar with userId for automatic navigation
+                        AvatarView(url: item.user.avatarUrl, size: 36, userId: item.user.id)
+                        
+                        VStack(alignment: .leading, spacing: 2) {
+                            // Username also tappable
+                            TappableUsername(
+                                username: item.user.displayNameOrHandle,
+                                userId: item.user.id,
+                                font: .system(size: 14, weight: .semibold),
+                                color: .white
+                            )
                             
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(item.user.displayNameOrHandle)
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .foregroundColor(.white)
-                                
-                                Text(timeAgoString(from: item.createdAt))
-                                    .font(.system(size: 11))
-                                    .foregroundColor(.white.opacity(0.8))
-                            }
+                            Text(timeAgoString(from: item.createdAt))
+                                .font(.system(size: 11))
+                                .foregroundColor(.white.opacity(0.8))
                         }
                     }
-                    .buttonStyle(.plain)
                     
                     Spacer()
                     
@@ -79,6 +84,49 @@ struct FeedCardView: View {
                 
                 Spacer()
             }
+            
+            // Double-tap like heart animation
+            if showLikeAnimation {
+                Image(systemName: "heart.fill")
+                    .font(.system(size: 80))
+                    .foregroundColor(.white)
+                    .shadow(color: .black.opacity(0.3), radius: 10)
+                    .transition(.scale.combined(with: .opacity))
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) {
+            handleDoubleTapLike()
+        }
+    }
+    
+    // MARK: - Double Tap Like Handler
+    
+    private func handleDoubleTapLike() {
+        print("👆 [DoubleTap] Triggered on item: \(item.id), isLiked: \(item.isLiked)")
+        
+        // Only like if not already liked (Instagram behavior)
+        if !item.isLiked {
+            print("❤️ [DoubleTap] Calling LikeService")
+            // Use LikeService - the callback will handle UI update via parent
+            onLikeTap?()
+        } else {
+            print("💔 [DoubleTap] Already liked, skipping API call (Instagram behavior)")
+        }
+        
+        // Always show animation on double-tap
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+            showLikeAnimation = true
+        }
+        
+        // Haptic feedback
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        
+        // Hide animation after delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+            withAnimation(.easeOut(duration: 0.3)) {
+                showLikeAnimation = false
+            }
         }
     }
     
@@ -86,9 +134,8 @@ struct FeedCardView: View {
     
     private func menuButton(onPhoto: Bool) -> some View {
         Button {
-            withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
-                showMenuForId = isMenuShown ? nil : item.id
-            }
+            // No animation needed - sheet has its own presentation animation
+            showMenuForId = isMenuShown ? nil : item.id
         } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: 16, weight: .semibold))
@@ -125,15 +172,17 @@ struct FeedCardView: View {
     
     private var noPhotoHeader: some View {
         HStack(spacing: 12) {
-            Button { onUserTap?() } label: {
-                AvatarView(url: item.user.avatarUrl, size: 40)
-            }
-            .buttonStyle(.plain)
+            // Avatar with userId for automatic navigation
+            AvatarView(url: item.user.avatarUrl, size: 40, userId: item.user.id)
             
             VStack(alignment: .leading, spacing: 2) {
-                Text(item.user.displayNameOrHandle)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundColor(.primary)
+                // Username also tappable
+                TappableUsername(
+                    username: item.user.displayNameOrHandle,
+                    userId: item.user.id,
+                    font: .system(size: 15, weight: .semibold),
+                    color: .primary
+                )
                 
                 Text(timeAgoString(from: item.createdAt))
                     .font(.system(size: 12))
@@ -195,7 +244,10 @@ struct FeedCardView: View {
                 filledIcon: "heart.fill",
                 count: item.likeCount > 0 ? item.likeCount : nil,
                 isActive: item.isLiked,
-                action: { onLikeTap?() }
+                action: {
+                    print("❤️ [HeartButton] Tapped for item: \(item.id)")
+                    onLikeTap?()
+                }
             )
             
             FeedActionButton(
@@ -224,12 +276,18 @@ struct FeedCardView: View {
 
 struct FeedMenuSheet: View {
     let item: FeedItem
-    var onViewProfile: (() -> Void)?
     var onViewPlace: (() -> Void)?
     var onSaveToList: (() -> Void)?
     var onReport: (() -> Void)?
+    var onEdit: (() -> Void)?
+    var onDelete: (() -> Void)?
     
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var navigator = NavigationCoordinator.shared
+    
+    private var isOwnVisit: Bool {
+        item.user.id == AuthManager.shared.currentUser?.id
+    }
     
     var body: some View {
         VStack(spacing: 0) {
@@ -240,9 +298,19 @@ struct FeedMenuSheet: View {
                 .padding(.bottom, 20)
             
             VStack(spacing: 0) {
-                menuRow(icon: "person.circle", title: "View Profile", subtitle: "@\(item.user.handle)") {
-                    dismiss()
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { onViewProfile?() }
+                // First row: Edit Visit (own) or View Profile (other)
+                if isOwnVisit {
+                    menuRow(icon: "pencil.circle", title: "Edit Visit") {
+                        dismiss()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { onEdit?() }
+                    }
+                } else {
+                    menuRow(icon: "person.circle", title: "View Profile", subtitle: "@\(item.user.handle)") {
+                        dismiss()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                            navigator.showProfile(userId: item.user.id)
+                        }
+                    }
                 }
                 
                 Divider().padding(.leading, 56)
@@ -261,9 +329,17 @@ struct FeedMenuSheet: View {
                 
                 Divider().padding(.leading, 56)
                 
-                menuRow(icon: "flag.circle", title: "Report", isDestructive: true) {
-                    dismiss()
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { onReport?() }
+                // Last row: Delete Visit (own) or Report (other)
+                if isOwnVisit {
+                    menuRow(icon: "trash.circle", title: "Delete Visit", isDestructive: true) {
+                        dismiss()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { onDelete?() }
+                    }
+                } else {
+                    menuRow(icon: "flag.circle", title: "Report", isDestructive: true) {
+                        dismiss()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { onReport?() }
+                    }
                 }
             }
             

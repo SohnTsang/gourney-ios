@@ -2,6 +2,8 @@
 // Profile data management with visits, follow toggle, and map data
 // Production-ready with memory optimization
 // FIX: Added notification listeners for seamless visit updates
+// FIX: Added support for loading by userId (fetches handle first)
+// FIX: Corrected visits-list parameter from 'handle' to 'user_handle'
 
 import Foundation
 import SwiftUI
@@ -38,7 +40,7 @@ class ProfileViewModel: ObservableObject {
     private var currentProfileTask: Task<Void, Never>?
     private var currentVisitsTask: Task<Void, Never>?
     private var paginationTask: Task<Void, Never>?
-    private let pageSize = 20
+    private let pageSize = 9
     
     // Notification subscriptions
     private var cancellables = Set<AnyCancellable>()
@@ -197,6 +199,7 @@ class ProfileViewModel: ObservableObject {
         
         print("👤 [Profile] Loading own profile for @\(user.handle)")
         self.handle = user.handle
+        self.userId = nil
         
         // Cancel any existing tasks
         currentProfileTask?.cancel()
@@ -208,8 +211,26 @@ class ProfileViewModel: ObservableObject {
     }
     
     private func performLoadProfile() async {
+        // If we only have userId, fetch handle first
+        if handle == nil, let userId = userId {
+            print("🔄 [Profile] Fetching handle for userId: \(userId)")
+            do {
+                let fetchedHandle = try await fetchHandleFromUserId(userId)
+                self.handle = fetchedHandle
+                print("✅ [Profile] Got handle: @\(fetchedHandle)")
+            } catch {
+                if Task.isCancelled { return }
+                print("❌ [Profile] Failed to fetch handle: \(error)")
+                self.error = "Failed to load profile"
+                isLoading = false
+                return
+            }
+        }
+        
         guard let handle = handle else {
             print("❌ [Profile] No handle provided")
+            self.error = "User not found"
+            isLoading = false
             return
         }
         
@@ -254,6 +275,29 @@ class ProfileViewModel: ObservableObject {
         }
     }
     
+    // MARK: - Fetch Handle from UserId
+    
+    /// Fetches user handle from userId via direct Supabase REST query
+    private func fetchHandleFromUserId(_ userId: String) async throws -> String {
+        // Direct query to users table for handle
+        let path = "/rest/v1/users?id=eq.\(userId)&select=handle&limit=1"
+        
+        struct HandleResponse: Codable {
+            let handle: String
+        }
+        
+        let response: [HandleResponse] = try await client.get(
+            path: path,
+            requiresAuth: true
+        )
+        
+        guard let first = response.first else {
+            throw ProfileError.userNotFound
+        }
+        
+        return first.handle
+    }
+    
     // MARK: - Load Visits
     
     private func loadVisitsInternal(refresh: Bool) async {
@@ -268,63 +312,81 @@ class ProfileViewModel: ObservableObject {
             // Keep existing visits visible during refresh (Instagram pattern)
         }
         
-        guard hasMoreVisits else { return }
-        
-        // Only show loading indicator if no visits yet
-        if visits.isEmpty {
-            isLoadingVisits = true
+        guard hasMoreVisits else {
+            print("📭 [Visits] No more visits to load")
+            return
         }
         
+        // Prevent duplicate loading
+        guard !isLoadingVisits else {
+            print("⚠️ [Visits] Already loading, skipping")
+            return
+        }
+        
+        isLoadingVisits = true
+        
         do {
+            try Task.checkCancellation()
+            
+            // Use visits-history endpoint with 'handle' parameter
             var path = "/functions/v1/visits-history?handle=\(handle)&limit=\(pageSize)"
             if let cursor = visitsCursor {
-                path += "&cursor_created_at=\(cursor.createdAt)&cursor_id=\(cursor.id)"
+                let cursorString = "\(cursor.createdAt),\(cursor.id)"
+                if let encoded = cursorString.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
+                    path += "&cursor=\(encoded)"
+                }
             }
             
-            print("📋 [Visits] Fetching: \(path)")
+            print("📸 [Visits] Fetching: \(path)")
             
             let response: ProfileVisitsResponse = try await client.get(
                 path: path,
                 requiresAuth: true
             )
             
-            // Check if task was cancelled
-            if Task.isCancelled { return }
+            try Task.checkCancellation()
             
-            print("✅ [Visits] Received \(response.visits.count) visits")
-            print("   📄 Has more: \(response.nextCursor != nil)")
+            print("✅ [Visits] Got \(response.visits.count) visits, hasMore: \(response.nextCursor != nil)")
             
             if refresh {
-                // Replace visits on refresh
                 visits = response.visits
             } else {
-                // Append for pagination
                 let existingIds = Set(visits.map { $0.id })
                 let newVisits = response.visits.filter { !existingIds.contains($0.id) }
                 visits.append(contentsOf: newVisits)
+                print("📊 [Visits] Total visits now: \(visits.count)")
             }
             
             hasMoreVisits = response.nextCursor != nil
             visitsCursor = response.nextCursor
+            isLoadingVisits = false
             
-            print("📊 [Visits] Total loaded: \(visits.count)")
-            
+        } catch is CancellationError {
+            print("⚠️ [Visits] Task cancelled")
+            isLoadingVisits = false
         } catch {
             if Task.isCancelled { return }
             print("❌ [Visits] Error: \(error)")
+            isLoadingVisits = false
         }
-        
-        isLoadingVisits = false
     }
     
+    // MARK: - Load More Visits (Pagination)
+    
     func loadMoreVisitsIfNeeded(currentVisit: ProfileVisit) {
-        guard let index = visits.firstIndex(where: { $0.id == currentVisit.id }) else { return }
+        guard let index = visits.firstIndex(where: { $0.id == currentVisit.id }) else {
+            print("⚠️ [Visits] Visit not found in array for pagination check")
+            return
+        }
         
-        // Load more when near the end
-        if index >= visits.count - 5 && hasMoreVisits && paginationTask == nil {
-            paginationTask = Task { [weak self] in
+        let threshold = visits.count - 3
+        print("📜 [Visits] Pagination check: index=\(index), threshold=\(threshold), hasMore=\(hasMoreVisits), isLoading=\(isLoadingVisits)")
+        
+        // Load more when near the end (3 items from bottom)
+        if index >= threshold && hasMoreVisits && !isLoadingVisits {
+            print("🚀 [Visits] Triggering pagination load...")
+            Task { [weak self] in
                 await self?.loadVisitsInternal(refresh: false)
-                self?.paginationTask = nil
             }
         }
     }
@@ -332,39 +394,38 @@ class ProfileViewModel: ObservableObject {
     // MARK: - Toggle Follow
     
     func toggleFollow() {
-        guard !isOwnProfile, let targetId = profile?.id else { return }
+        guard let profileId = profile?.id else { return }
+        guard !isTogglingFollow else { return }
         
-        let wasFollowing = isFollowing
+        isTogglingFollow = true
         
         // Optimistic update
-        isFollowing = !wasFollowing
+        let wasFollowing = isFollowing
+        isFollowing.toggle()
+        
+        // Update follower count optimistically
         if var currentProfile = profile {
             currentProfile.followerCount += wasFollowing ? -1 : 1
             profile = currentProfile
         }
         
-        // Haptic
-        let generator = UIImpactFeedbackGenerator(style: .medium)
-        generator.impactOccurred()
-        
-        isTogglingFollow = true
+        // Haptic feedback
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
         
         Task {
             do {
-                let method = wasFollowing ? "DELETE" : "POST"
-                let path = "/functions/v1/follows-manage?user_id=\(targetId)"
+                let path = "/functions/v1/follows-manage"
+                print("👥 [Follow] Toggling follow for: \(profileId)")
                 
-                print("👥 [Follow] \(method) \(path)")
-                
-                let response: FollowResponse = try await client.request(
+                let response: FollowResponse = try await client.post(
                     path: path,
-                    method: method,
+                    body: ["followee_id": profileId],
                     requiresAuth: true
                 )
                 
-                print("✅ [Follow] \(response.action)")
+                print("✅ [Follow] Result: \(response.action)")
                 
-                // Sync with server
+                // Sync with server response
                 isFollowing = response.action == "followed"
                 if var currentProfile = profile {
                     currentProfile.followerCount = response.followerCount
@@ -431,6 +492,23 @@ class ProfileViewModel: ObservableObject {
         error = nil
         isBioExpanded = false
         handle = nil
+        userId = nil
+    }
+}
+
+// MARK: - Profile Error
+
+enum ProfileError: Error, LocalizedError {
+    case userNotFound
+    case invalidResponse
+    
+    var errorDescription: String? {
+        switch self {
+        case .userNotFound:
+            return "User not found"
+        case .invalidResponse:
+            return "Invalid response from server"
+        }
     }
 }
 

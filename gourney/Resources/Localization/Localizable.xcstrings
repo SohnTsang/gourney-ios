@@ -1640,6 +1640,9 @@
     "Leaderboard" : {
 
     },
+    "Less" : {
+
+    },
     "List name" : {
 
     },
@@ -2215,6 +2218,9 @@
       }
     },
     "Map" : {
+
+    },
+    "More" : {
 
     },
     "N/A" : {
@@ -3103,9 +3109,6 @@
 
     },
     "username" : {
-
-    },
-    "view more" : {
 
     },
     "Visibility" : {

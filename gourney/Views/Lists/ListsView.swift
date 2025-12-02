@@ -38,13 +38,23 @@ struct ListsView: View {
         }
     }
     
+    // ✅ FIX 2: Deduplicate lists to prevent ForEach warnings
     var filteredLists: [RestaurantList] {
         guard selectedFilter == .myLists else {
             return []
         }
         
         let allLists = viewModel.defaultLists + viewModel.customLists
-        return allLists.filter { list in
+        
+        // ✅ Deduplicate by ID to prevent ForEach warnings
+        var seen = Set<String>()
+        let uniqueLists = allLists.filter { list in
+            guard !seen.contains(list.id) else { return false }
+            seen.insert(list.id)
+            return true
+        }
+        
+        return uniqueLists.filter { list in
             switch list.visibility {
             case "private": return showPrivate
             case "friends": return showFriends
@@ -144,8 +154,8 @@ struct ListsView: View {
             }
             .padding(.horizontal, 12)  // ✅ Add horizontal padding for grid
             
-            // Empty states
-            if selectedFilter == .myLists && filteredLists.isEmpty && !viewModel.isLoading {
+            // Empty states - only show after initial load completes
+            if selectedFilter == .myLists && filteredLists.isEmpty && !viewModel.isLoading && viewModel.hasLoadedMyLists {
                 if showPrivate || showFriends || showPublic {
                     EmptyListsView(showCreateList: $showCreateList)
                         .padding(.top, 100)
@@ -163,8 +173,8 @@ struct ListsView: View {
                 }
             }
             
-            // Empty state for Following
-            if selectedFilter == .following && viewModel.followingLists.isEmpty && !viewModel.isLoading && !viewModel.isLoadingMore {
+            // Empty state for Following - only show after initial load completes
+            if selectedFilter == .following && viewModel.followingLists.isEmpty && !viewModel.isLoading && !viewModel.isLoadingMore && viewModel.hasLoadedFollowing {
                 VStack(spacing: 16) {
                     Image(systemName: "person.2.fill")
                         .font(.system(size: 48))
@@ -177,8 +187,8 @@ struct ListsView: View {
                 .padding(.top, 100)
             }
             
-            // Empty state for Popular
-            if selectedFilter == .popular && viewModel.popularLists.isEmpty && !viewModel.isLoading && !viewModel.isLoadingMore {
+            // Empty state for Popular - only show after initial load completes
+            if selectedFilter == .popular && viewModel.popularLists.isEmpty && !viewModel.isLoading && !viewModel.isLoadingMore && viewModel.hasLoadedPopular {
                 VStack(spacing: 16) {
                     Image(systemName: "flame.fill")
                         .font(.system(size: 48))
@@ -251,11 +261,14 @@ struct ListsView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.bottom, 8)
                 
-                // Content
-                if viewModel.isLoading && !viewModel.isLoadingMore &&
-                   ((selectedFilter == .myLists && viewModel.defaultLists.isEmpty && viewModel.customLists.isEmpty) ||
-                    (selectedFilter == .following && viewModel.followingLists.isEmpty) ||
-                    (selectedFilter == .popular && viewModel.popularLists.isEmpty)) {
+                // Content - show loading spinner during initial load OR when isLoading and empty
+                if (selectedFilter == .myLists && !viewModel.hasLoadedMyLists) ||
+                   (selectedFilter == .following && !viewModel.hasLoadedFollowing) ||
+                   (selectedFilter == .popular && !viewModel.hasLoadedPopular) ||
+                   (viewModel.isLoading && !viewModel.isLoadingMore &&
+                    ((selectedFilter == .myLists && viewModel.defaultLists.isEmpty && viewModel.customLists.isEmpty) ||
+                     (selectedFilter == .following && viewModel.followingLists.isEmpty) ||
+                     (selectedFilter == .popular && viewModel.popularLists.isEmpty))) {
                     Spacer()
                     ProgressView()
                         .tint(GourneyColors.coral)
@@ -390,9 +403,12 @@ struct ListsView: View {
                 }
             }
         )
+        // ✅ FIX 3: Only load if we haven't loaded yet (prevents duplicate loads on navigation back)
         .onAppear {
-            Task {
-                await viewModel.loadLists()
+            if viewModel.defaultLists.isEmpty && viewModel.customLists.isEmpty && !viewModel.isLoading {
+                Task {
+                    await viewModel.loadLists()
+                }
             }
         }
         .onChange(of: selectedFilter) { _, newFilter in
@@ -509,6 +525,7 @@ struct FilterTab: View {
 }
 
 // MARK: - Long Press List Item
+// ✅ FIX 1: Added contentShape BEFORE gesture modifiers to constrain tap area
 
 struct LongPressListItem: View {
     let list: RestaurantList
@@ -521,6 +538,7 @@ struct LongPressListItem: View {
     
     var body: some View {
         ListGridItem(list: list, showLikes: showLikes)
+            .contentShape(RoundedRectangle(cornerRadius: 12)) // ✅ Constrain tap area to the image only
             .scaleEffect(isPressed ? 0.95 : 1.0)
             .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isPressed)
             .onTapGesture {
@@ -644,7 +662,6 @@ struct ListGridItem: View {
             Color.gray.opacity(0.15)
             ProgressView()
                 .tint(GourneyColors.coral.opacity(0.6))
-                .scaleEffect(0.8)
         }
     }
     
@@ -738,6 +755,7 @@ struct FollowingListGridItem: View {
         }
         .aspectRatio(1, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 12))
+        .contentShape(RoundedRectangle(cornerRadius: 12))  // ✅ Fix tap area
     }
     
     private var placeholderView: some View {
@@ -833,6 +851,7 @@ struct PopularListGridItem: View {
             }
             .aspectRatio(1, contentMode: .fit)  // ✅ Square aspect ratio
             .clipShape(RoundedRectangle(cornerRadius: 12))
+            .contentShape(RoundedRectangle(cornerRadius: 12))  // ✅ Fix tap area
         }
         .buttonStyle(PlainButtonStyle())
     }

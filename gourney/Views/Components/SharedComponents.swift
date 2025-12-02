@@ -23,16 +23,21 @@ struct GourneyColors {
 struct AvatarView: View {
     let url: String?
     let size: CGFloat
+    var userId: String? = nil  // Optional: Pass userId to enable tap-to-profile navigation
     var showBorder: Bool = false
     var borderColor: Color = GourneyColors.coral
     
+    // Access the shared navigation coordinator
+    @ObservedObject private var navigator = NavigationCoordinator.shared
+    
+    // Computed property to check if tap navigation is enabled
+    private var isTappable: Bool {
+        guard let userId = userId else { return false }
+        return navigator.canNavigateToProfile(userId: userId)
+    }
+    
     var body: some View {
         ZStack {
-            // Background circle
-            Circle()
-                .fill(GourneyColors.coralLight)
-                .frame(width: size + 4, height: size + 4)
-            
             // Border if enabled
             if showBorder {
                 Circle()
@@ -70,6 +75,13 @@ struct AvatarView: View {
                 placeholderView
             }
         }
+        .contentShape(Circle())
+        .onTapGesture {
+            if let userId = userId, isTappable {
+                navigator.showProfile(userId: userId)
+            }
+        }
+        .allowsHitTesting(isTappable)
     }
     
     private var placeholderView: some View {
@@ -281,6 +293,34 @@ struct FeedActionButton: View {
     }
 }
 
+// MARK: - Tappable User View (For username labels that navigate to profile)
+
+struct TappableUsername: View {
+    let username: String
+    let userId: String
+    var font: Font = .system(size: 14, weight: .semibold)
+    var color: Color = .primary
+    
+    @ObservedObject private var navigator = NavigationCoordinator.shared
+    
+    private var isTappable: Bool {
+        navigator.canNavigateToProfile(userId: userId)
+    }
+    
+    var body: some View {
+        Text(username)
+            .font(font)
+            .foregroundColor(color)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                if isTappable {
+                    navigator.showProfile(userId: userId)
+                }
+            }
+            .allowsHitTesting(isTappable)
+    }
+}
+
 // MARK: - Time Ago Helper
 
 func timeAgoString(from dateString: String) -> String {
@@ -314,6 +354,7 @@ private func formatTimeAgo(_ date: Date) -> String {
         AvatarView(url: nil, size: 40)
         AvatarView(url: nil, size: 40, showBorder: true)
         AvatarView(url: "https://example.com/avatar.jpg", size: 40)
+        AvatarView(url: nil, size: 40, userId: "test-user-id") // Tappable
     }
     .padding()
 }
@@ -348,4 +389,9 @@ private func formatTimeAgo(_ date: Date) -> String {
         FeedActionButton(icon: "bubble.right", count: 5, action: {})
         FeedActionButton(icon: "bookmark", filledIcon: "bookmark.fill", action: {})
     }
+}
+
+#Preview("Tappable Username") {
+    TappableUsername(username: "foodie_lover", userId: "user-123")
+        .padding()
 }

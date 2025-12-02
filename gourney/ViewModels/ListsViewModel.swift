@@ -50,6 +50,11 @@ class ListsViewModel: ObservableObject {
     @Published var isLoadingMore = false
     @Published var errorMessage: String?
     
+    // ✅ Track whether initial load has completed for each tab
+    @Published var hasLoadedMyLists = false
+    @Published var hasLoadedFollowing = false
+    @Published var hasLoadedPopular = false
+    
     // Pagination
     private var myListsPage = 0
     private var followingPage = 0
@@ -73,6 +78,9 @@ class ListsViewModel: ObservableObject {
         hasMoreMyLists = true
         hasMoreFollowing = true
         currentLoadId = nil
+        hasLoadedMyLists = false
+        hasLoadedFollowing = false
+        hasLoadedPopular = false
         print("🧹 [Lists] Memory cleared")
     }
     
@@ -150,6 +158,7 @@ class ListsViewModel: ObservableObject {
             
             isLoading = false
             isLoadingMore = false
+            hasLoadedMyLists = true
             print("✅ [Lists] Loaded \(allLists.count) lists")
         } catch {
             // ✅ Only update state if we still own the load
@@ -160,6 +169,7 @@ class ListsViewModel: ObservableObject {
             errorMessage = error.localizedDescription
             isLoading = false
             isLoadingMore = false
+            hasLoadedMyLists = true  // Still mark as loaded even on error
             print("❌ [Lists] Load error: \(error)")
         }
     }
@@ -240,6 +250,7 @@ class ListsViewModel: ObservableObject {
             
             isLoading = false
             isLoadingMore = false
+            hasLoadedFollowing = true
             print("✅ [Lists] Loaded \(followingLists.count) following lists")
         } catch {
             // ✅ Only update state if we still own the load
@@ -250,6 +261,7 @@ class ListsViewModel: ObservableObject {
             errorMessage = error.localizedDescription
             isLoading = false
             isLoadingMore = false
+            hasLoadedFollowing = true  // Still mark as loaded even on error
             print("❌ [Lists] Following lists error: \(error)")
         }
     }
@@ -424,6 +436,7 @@ extension ListsViewModel {
             // ✅ Only reset loading state if we still own it
             isLoading = false
             isLoadingMore = false
+            hasLoadedPopular = true
         } catch {
             // ✅ Only update state if we still own the load
             guard currentLoadId == loadId else {
@@ -434,6 +447,7 @@ extension ListsViewModel {
             errorMessage = error.localizedDescription
             isLoading = false
             isLoadingMore = false
+            hasLoadedPopular = true  // Still mark as loaded even on error
         }
         
         print("🔄 [Popular] Load complete for loadId: \(loadId.uuidString.prefix(8))")

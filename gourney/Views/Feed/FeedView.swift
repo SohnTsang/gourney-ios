@@ -1,21 +1,27 @@
 // Views/Feed/FeedView.swift
 // "For You" feed with Gourney branding, search, and infinite scroll
 // NavigationStack with push to FeedDetailView on comment tap
+// Profile navigation via NavigationCoordinator (standard NavigationStack push like ListsView)
 
 import SwiftUI
 
 struct FeedView: View {
     @StateObject private var viewModel = FeedViewModel()
+    @ObservedObject private var navigator = NavigationCoordinator.shared
     @State private var showSearch = false
     @State private var showSaveToList = false
     @State private var selectedItem: FeedItem?
-    @State private var showUserProfile = false
-    @State private var selectedUserId: String?
     @State private var selectedPlaceItem: FeedItem?
     @State private var showAddVisitFromPlace = false
     @State private var placeForAddVisit: FeedItem?
     @State private var showMenuForId: String?
     @State private var navigateToDetail: FeedItem?
+    
+    // Edit/Delete states
+    @State private var itemToEdit: FeedItem?
+    @State private var showDeleteVisitAlert = false
+    @State private var itemToDelete: FeedItem?
+    @State private var isDeletingVisit = false
     
     @Environment(\.colorScheme) private var colorScheme
     
@@ -61,6 +67,16 @@ struct FeedView: View {
             .navigationDestination(item: $navigateToDetail) { item in
                 FeedDetailView(feedItem: item, feedViewModel: viewModel)
             }
+            // Profile navigation - same pattern as ListsView uses for ListDetailView
+            .navigationDestination(item: $navigator.navigateToProfileUserId) { userId in
+                ProfileView(userId: userId)
+            }
+            // Edit visit navigation
+            .navigationDestination(item: $itemToEdit) { item in
+                EditVisitView(feedItem: item) { updatedItem in
+                    viewModel.updateItem(updatedItem)
+                }
+            }
         }
         .onAppear {
             viewModel.loadFeed()
@@ -69,10 +85,6 @@ struct FeedView: View {
             if let item = menuItem {
                 FeedMenuSheet(
                     item: item,
-                    onViewProfile: {
-                        selectedUserId = item.user.id
-                        showUserProfile = true
-                    },
                     onViewPlace: {
                         selectedPlaceItem = item
                     },
@@ -80,7 +92,14 @@ struct FeedView: View {
                         selectedItem = item
                         showSaveToList = true
                     },
-                    onReport: { }
+                    onReport: { },
+                    onEdit: {
+                        itemToEdit = item
+                    },
+                    onDelete: {
+                        itemToDelete = item
+                        showDeleteVisitAlert = true
+                    }
                 )
             }
         }
@@ -151,6 +170,58 @@ struct FeedView: View {
             // Clear stored place when AddVisit is dismissed
             if !newValue {
                 placeForAddVisit = nil
+            }
+        }
+        .customDeleteAlert(
+            isPresented: $showDeleteVisitAlert,
+            title: "Delete Visit",
+            message: "Are you sure you want to delete this visit? This cannot be undone.",
+            confirmTitle: "Delete",
+            onConfirm: {
+                if let item = itemToDelete {
+                    deleteVisit(item)
+                }
+            }
+        )
+        .loadingOverlay(isShowing: isDeletingVisit, message: "Deleting...")
+    }
+    
+    // MARK: - Delete Visit
+    
+    private func deleteVisit(_ item: FeedItem) {
+        isDeletingVisit = true
+        
+        Task { @MainActor in
+            do {
+                let path = "/functions/v1/visits-delete?visit_id=\(item.id)"
+                print("🗑️ [Visit] Deleting: \(item.id)")
+                
+                let _: EmptyResponse = try await SupabaseClient.shared.delete(
+                    path: path,
+                    requiresAuth: true
+                )
+                
+                print("✅ [Visit] Deleted successfully")
+                
+                // Broadcast delete notification to all listening views
+                VisitUpdateService.shared.notifyVisitDeleted(visitId: item.id)
+                
+                // Remove from feed
+                viewModel.removeVisit(id: item.id)
+                
+                // Success haptic
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                
+                // Clear state
+                itemToDelete = nil
+                isDeletingVisit = false
+                
+            } catch {
+                print("❌ [Visit] Delete error: \(error)")
+                isDeletingVisit = false
+                itemToDelete = nil
+                
+                UINotificationFeedbackGenerator().notificationOccurred(.error)
             }
         }
     }
@@ -229,10 +300,6 @@ struct FeedView: View {
                             showSaveToList = true
                         },
                         onShareTap: { shareItem(item) },
-                        onUserTap: {
-                            selectedUserId = item.user.id
-                            showUserProfile = true
-                        },
                         onPlaceTap: {
                             selectedPlaceItem = item
                         },

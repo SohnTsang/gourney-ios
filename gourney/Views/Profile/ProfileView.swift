@@ -3,6 +3,8 @@
 // Production-ready with memory optimization
 // FIX: Changed onDisappear to cleanup() instead of reset() for seamless updates
 // FIX: Removed VisitRefreshTrigger - now using NotificationCenter
+// FIX: Top bar title always centered using ZStack overlay
+// FIX: Uses standard NavigationStack dismiss (like ListDetailView)
 
 import SwiftUI
 import MapKit
@@ -113,46 +115,58 @@ struct ProfileView: View {
         }
     }
     
-    // MARK: - Top Bar (Fixed at top)
+    // MARK: - Top Bar (Fixed at top) - Title Always Centered
     
     private var topBar: some View {
         VStack(spacing: 0) {
-            HStack {
-                // Left: Back button (for other profiles only)
-                if !isOwnProfile {
-                    Button {
-                        dismiss()
-                    } label: {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundColor(.primary)
-                    }
-                    .padding(.leading, 16)
-                } else {
-                    Spacer().frame(width: 50)
-                }
-                
-                Spacer()
-                
-                // Center: Username
+            ZStack {
+                // Center: Username (always centered using ZStack)
                 Text(viewModel.profile?.displayNameOrHandle ?? "Profile")
-                    .font(.system(size: 20, weight: .bold))
+                    .font(.system(size: 18, weight: .bold))
                     .foregroundColor(.primary)
+                    .lineLimit(1)
                 
-                Spacer()
-                
-                // Right: Settings (own profile only)
-                if isOwnProfile {
-                    Button {
-                        navigationPath.append("settings")
-                    } label: {
-                        Image(systemName: "gearshape")
-                            .font(.system(size: 20))
-                            .foregroundColor(.primary)
+                // Left and Right buttons using HStack overlay
+                HStack {
+                    // Left: Back button (for other profiles only)
+                    if !isOwnProfile {
+                        Button {
+                            dismiss()
+                        } label: {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 18, weight: .semibold))
+                                .foregroundColor(.primary)
+                                .frame(width: 44, height: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .padding(.leading, 4)
+                    } else {
+                        // Invisible spacer to balance
+                        Color.clear
+                            .frame(width: 44, height: 44)
+                            .padding(.leading, 4)
                     }
-                    .padding(.trailing, 16)
-                } else {
-                    Spacer().frame(width: 50)
+                    
+                    Spacer()
+                    
+                    // Right: Settings (own profile only)
+                    if isOwnProfile {
+                        Button {
+                            navigationPath.append("settings")
+                        } label: {
+                            Image(systemName: "gearshape")
+                                .font(.system(size: 20))
+                                .foregroundColor(.primary)
+                                .frame(width: 44, height: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .padding(.trailing, 4)
+                    } else {
+                        // Invisible spacer to balance
+                        Color.clear
+                            .frame(width: 44, height: 44)
+                            .padding(.trailing, 4)
+                    }
                 }
             }
             .frame(height: 44)
@@ -230,40 +244,36 @@ struct ProfileView: View {
             
             // Center Column: Avatar + Name + Handle
             VStack(spacing: 8) {
-                AvatarView(url: profile.avatarUrl, size: 72)
-                    .background(
-                        GeometryReader { geo in
-                            Color.clear.onAppear {
-                                avatarFrame = geo.frame(in: .global)
-                            }
-                            .onChange(of: geo.frame(in: .global)) { _, newFrame in
-                                avatarFrame = newFrame
-                            }
-                        }
-                    )
-                    .onLongPressGesture(minimumDuration: 0.3) {
-                        if profile.avatarUrl != nil {
-                            let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
-                            impactFeedback.impactOccurred()
+                // Avatar (larger, no border) - tappable for preview on own profile
+                if isOwnProfile {
+                    Button {
+                        // Show avatar preview
+                        if let avatarUrl = profile.avatarUrl {
                             AvatarPreviewState.shared.show(
                                 image: nil,
-                                imageUrl: profile.avatarUrl,
+                                imageUrl: avatarUrl,
                                 sourceFrame: avatarFrame
                             )
                         }
+                    } label: {
+                        AvatarView(url: profile.avatarUrl, size: 80)
+                            .background(
+                                GeometryReader { geo in
+                                    Color.clear.onAppear {
+                                        avatarFrame = geo.frame(in: .global)
+                                    }
+                                }
+                            )
                     }
-                
-                VStack(spacing: 2) {
-                    Text(profile.displayNameOrHandle)
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundColor(.primary)
-                        .lineLimit(1)
-                    
-                    Text("@\(profile.handle)")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
+                    .buttonStyle(.plain)
+                } else {
+                    AvatarView(url: profile.avatarUrl, size: 80)
                 }
+                
+                // Handle (below avatar)
+                Text("@\(profile.handle)")
+                    .font(.system(size: 13))
+                    .foregroundColor(.secondary)
             }
             .frame(maxWidth: .infinity)
             
@@ -283,7 +293,7 @@ struct ProfileView: View {
         }
     }
     
-    // MARK: - Stat Item (Consistent font size for all stats)
+    // MARK: - Stat Item
     
     private func statItem(value: Int, label: String) -> some View {
         VStack(spacing: 2) {
@@ -296,37 +306,25 @@ struct ProfileView: View {
         }
     }
     
-    // MARK: - Bio Section (Centered, 2-line truncation with "view more")
+    // MARK: - Bio Section (Centered, truncated to 3 lines)
     
     private func bioSection(_ bio: String) -> some View {
         VStack(spacing: 4) {
-            if viewModel.isBioExpanded {
-                // Expanded: show full bio
-                Text(bio)
-                    .font(.system(size: 14))
-                    .foregroundColor(.primary)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else {
-                // Collapsed: 2 lines with "view more" inline
-                Text(bio)
-                    .font(.system(size: 14))
-                    .foregroundColor(.primary)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                    .truncationMode(.tail)
-                
-                // Show "view more" if bio is likely truncated (rough heuristic)
-                if bio.count > 80 {
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            viewModel.isBioExpanded = true
-                        }
-                    } label: {
-                        Text("view more")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(GourneyColors.coral)
+            Text(bio)
+                .font(.system(size: 14))
+                .foregroundColor(.primary)
+                .multilineTextAlignment(.center)
+                .lineLimit(viewModel.isBioExpanded ? nil : 3)
+            
+            if bio.count > 100 {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        viewModel.isBioExpanded.toggle()
                     }
+                } label: {
+                    Text(viewModel.isBioExpanded ? "Less" : "More")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(GourneyColors.coral)
                 }
             }
         }
@@ -465,7 +463,7 @@ struct ProfileView: View {
                     ],
                     spacing: 2
                 ) {
-                    ForEach(viewModel.visits) { visit in
+                    ForEach(Array(viewModel.visits.enumerated()), id: \.element.id) { index, visit in
                         ProfileVisitCard(visit: visit)
                             .aspectRatio(4/5, contentMode: .fill)
                             .onTapGesture {
@@ -476,18 +474,23 @@ struct ProfileView: View {
                                 }
                             }
                             .onAppear {
-                                viewModel.loadMoreVisitsIfNeeded(currentVisit: visit)
+                                // ✅ Trigger pagination when near the end
+                                if index >= viewModel.visits.count - 3 {
+                                    print("📜 [Profile] Near end, triggering pagination at index \(index)")
+                                    viewModel.loadMoreVisitsIfNeeded(currentVisit: visit)
+                                }
                             }
                     }
                     
                     // Pagination loading - shared skeleton cells
-                    if viewModel.isLoadingVisits {
+                    if viewModel.isLoadingVisits && !viewModel.visits.isEmpty {
                         ForEach(0..<3, id: \.self) { _ in
                             GridSkeletonCell(aspectRatio: 4/5)
                         }
                     }
                 }
                 .padding(.horizontal, 2)
+                .padding(.bottom, 100) // Space for tab bar
             }
         }
     }
@@ -522,6 +525,8 @@ struct ProfileView: View {
             Button {
                 if let handle = userHandle {
                     viewModel.loadProfile(handle: handle)
+                } else if let id = userId {
+                    viewModel.loadProfile(userId: id)
                 } else {
                     viewModel.loadOwnProfile()
                 }

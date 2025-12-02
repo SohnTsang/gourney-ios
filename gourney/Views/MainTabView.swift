@@ -1,6 +1,7 @@
 // Views/MainTabView.swift
 // Main tab bar with Gourney design system
 // Tab order: Feed, Discover, Add, Rank, Profile (5 tabs)
+// ✅ Centralized profile navigation via NavigationCoordinator (fullScreenCover)
 
 import SwiftUI
 import Combine
@@ -96,6 +97,9 @@ struct MainTabView: View {
         .onAppear {
             configureTabBarAppearance()
         }
+        // NOTE: Profile navigation is handled via NavigationCoordinator in each view's NavigationStack
+        // (e.g., FeedView has .navigationDestination(item: $navigator.navigateToProfileUserId))
+        // Do NOT add .sheet() or .fullScreenCover() here to avoid duplicate presentations
     }
     
     private func configureTabBarAppearance() {

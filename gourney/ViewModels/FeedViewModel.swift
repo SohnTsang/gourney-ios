@@ -234,45 +234,76 @@ class FeedViewModel: ObservableObject {
     // MARK: - Toggle Like (Instagram-style - final state always wins)
     
     func toggleLike(for item: FeedItem) {
-        guard let index = items.firstIndex(where: { $0.id == item.id }) else { return }
+        print("🔥 [toggleLike] Called for item: \(item.id)")
+        
+        guard let index = items.firstIndex(where: { $0.id == item.id }) else {
+            print("⚠️ [toggleLike] Item NOT FOUND in items array!")
+            return
+        }
         
         let itemId = item.id
+        let wasLiked = items[index].isLiked
         
         // Optimistic UI update immediately
         items[index].isLiked.toggle()
         items[index].likeCount += items[index].isLiked ? 1 : -1
         items[index].likeCount = max(0, items[index].likeCount)
         
+        print("💫 [toggleLike] Optimistic update: \(wasLiked) -> \(items[index].isLiked), count: \(items[index].likeCount)")
+        
         // Haptic feedback
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         
         // Cancel any pending API call for this item
-        pendingLikeTasks[itemId]?.cancel()
+        if pendingLikeTasks[itemId] != nil {
+            print("🚫 [toggleLike] Cancelling pending task for \(itemId)")
+            pendingLikeTasks[itemId]?.cancel()
+        }
         
         // Capture the final desired state AFTER the toggle
         let finalDesiredState = items[index].isLiked
         
+        print("⏳ [toggleLike] Scheduling API call in 300ms, desiredState: \(finalDesiredState)")
+        
         // Debounce: wait 300ms before making API call
         pendingLikeTasks[itemId] = Task {
-            try? await Task.sleep(nanoseconds: 300_000_000) // 300ms
-            
-            guard !Task.isCancelled else { return }
-            
-            await syncLikeWithServer(itemId: itemId, desiredState: finalDesiredState)
+            do {
+                try await Task.sleep(nanoseconds: 300_000_000) // 300ms
+                print("⏰ [toggleLike] 300ms passed, calling syncLikeWithServer")
+                
+                guard !Task.isCancelled else {
+                    print("🚫 [toggleLike] Task was cancelled before sync")
+                    return
+                }
+                
+                await syncLikeWithServer(itemId: itemId, desiredState: finalDesiredState)
+            } catch {
+                print("❌ [toggleLike] Sleep error: \(error)")
+            }
         }
     }
     
     private func syncLikeWithServer(itemId: String, desiredState: Bool) async {
+        print("🌐 [syncLike] Starting for \(itemId), desiredState: \(desiredState)")
+        
         // Get current UI state - this is what user expects to see
-        guard let index = items.firstIndex(where: { $0.id == itemId }) else { return }
+        guard let index = items.firstIndex(where: { $0.id == itemId }) else {
+            print("⚠️ [syncLike] Item not found in array, aborting")
+            return
+        }
         let currentUIState = items[index].isLiked
+        print("🔍 [syncLike] Current UI state: \(currentUIState)")
         
         // If UI state changed since we scheduled this call, don't proceed
         // (another tap happened and will handle it)
-        guard currentUIState == desiredState else { return }
+        guard currentUIState == desiredState else {
+            print("⚠️ [syncLike] UI state changed (\(currentUIState) != \(desiredState)), skipping")
+            return
+        }
         
         do {
             let path = "/functions/v1/likes-toggle?visit_id=\(itemId)"
+            print("📤 [syncLike] Calling API: \(path)")
             
             let response: LikeToggleResponse = try await client.post(
                 path: path,
@@ -280,32 +311,53 @@ class FeedViewModel: ObservableObject {
                 requiresAuth: true
             )
             
-            guard !Task.isCancelled else { return }
+            print("📥 [syncLike] API Response - liked: \(response.liked), count: \(response.likeCount)")
+            
+            guard !Task.isCancelled else {
+                print("🚫 [syncLike] Task cancelled after API call")
+                return
+            }
             
             // Check if UI state still matches what we wanted
-            guard let idx = self.items.firstIndex(where: { $0.id == itemId }) else { return }
+            guard let idx = self.items.firstIndex(where: { $0.id == itemId }) else {
+                print("⚠️ [syncLike] Item disappeared from array after API call")
+                return
+            }
             let currentState = items[idx].isLiked
             
             // If server state matches desired state, sync the count
             if response.liked == desiredState {
                 self.items[idx].likeCount = response.likeCount
+                print("✅ [Like] Synced - liked: \(response.liked), count: \(response.likeCount)")
             } else if currentState == desiredState {
                 // Server disagrees but UI shows what user wants - call API again to fix
-                print("⚠️ [Like] Server mismatch, retrying to sync...")
+                print("⚠️ [Like] Server mismatch (server: \(response.liked), wanted: \(desiredState)), retrying...")
                 await syncLikeWithServer(itemId: itemId, desiredState: desiredState)
                 return
             }
             
-            print("✅ [Like] Synced - liked: \(response.liked), count: \(response.likeCount)")
-            
         } catch {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled else {
+                print("🚫 [syncLike] Task cancelled during error handling")
+                return
+            }
             print("❌ [Like] Error: \(error)")
             // Don't revert - keep UI state as user intended
             // Next refresh will sync properly
         }
         
         pendingLikeTasks.removeValue(forKey: itemId)
+        print("🧹 [syncLike] Cleaned up pending task for \(itemId)")
+    }
+    
+    // MARK: - Update Like State (called from LikeService)
+    
+    func updateLikeState(visitId: String, isLiked: Bool, likeCount: Int) {
+        if let index = items.firstIndex(where: { $0.id == visitId }) {
+            items[index].isLiked = isLiked
+            items[index].likeCount = likeCount
+            print("✅ [Feed] Updated like state for: \(visitId)")
+        }
     }
     
     // MARK: - Update Comment Count (called from FeedDetailView)

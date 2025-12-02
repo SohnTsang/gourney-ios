@@ -1,6 +1,7 @@
 // Views/Rank/RankView.swift
 // ✅ Production-grade with Instagram-style avatar loading
 // ✅ Fixed: Seamless tab switching with proper loading states
+// Avatar taps now navigate via NavigationCoordinator
 
 import SwiftUI
 
@@ -441,7 +442,7 @@ struct LocationOption: View {
     }
 }
 
-// MARK: - Podium Card
+// MARK: - Podium Card (Tappable for profile navigation)
 
 struct PodiumCard: View {
     let entry: LeaderboardEntry
@@ -449,6 +450,7 @@ struct PodiumCard: View {
     var selectedTimeframe: RankTimeframe = .allTime
     var currentUserId: String? = nil
     @Environment(\.colorScheme) private var colorScheme
+    @ObservedObject private var navigator = NavigationCoordinator.shared
     
     private var isCurrentUser: Bool { entry.userId == currentUserId }
     
@@ -473,75 +475,82 @@ struct PodiumCard: View {
     private var containerSize: CGFloat { position == 1 ? 64 : 52 }
     
     var body: some View {
-        VStack(spacing: 8) {
-            // Avatar - Instagram style loading
-            ZStack {
-                Circle()
-                    .fill(Color(red: 1.0, green: 0.4, blue: 0.4).opacity(isCurrentUser ? 0.3 : 0.2))
-                    .frame(width: containerSize, height: containerSize)
-                
-                if isCurrentUser {
+        Button {
+            navigator.showProfile(userId: entry.userId)
+        } label: {
+            VStack(spacing: 8) {
+                // Avatar - Instagram style loading
+                ZStack {
                     Circle()
-                        .stroke(Color(red: 1.0, green: 0.4, blue: 0.4), lineWidth: 2)
+                        .fill(Color(red: 1.0, green: 0.4, blue: 0.4).opacity(isCurrentUser ? 0.3 : 0.2))
                         .frame(width: containerSize, height: containerSize)
+                    
+                    if isCurrentUser {
+                        Circle()
+                            .stroke(Color(red: 1.0, green: 0.4, blue: 0.4), lineWidth: 2)
+                            .frame(width: containerSize, height: containerSize)
+                    }
+                    
+                    AvatarImageView(
+                        url: entry.avatarUrl,
+                        size: avatarSize,
+                        placeholder: "person.fill"
+                    )
                 }
                 
-                AvatarImageView(
-                    url: entry.avatarUrl,
-                    size: avatarSize,
-                    placeholder: "person.fill"
-                )
-            }
-            
-            Text(medalEmoji).font(.system(size: 24))
-            
-            HStack(spacing: 4) {
-                Text(entry.displayName ?? entry.handle)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(.primary)
+                Text(medalEmoji).font(.system(size: 24))
+                
+                HStack(spacing: 4) {
+                    Text(entry.displayName ?? entry.handle)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+                    
+                    if isCurrentUser {
+                        Text("(You)")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
+                    }
+                }
+                
+                Text("@\(entry.handle)")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
                     .lineLimit(1)
                 
-                if isCurrentUser {
-                    Text("(You)")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
-                }
+                Text("\(displayPoints) pts")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
             }
-            
-            Text("@\(entry.handle)")
-                .font(.system(size: 11))
-                .foregroundColor(.secondary)
-                .lineLimit(1)
-            
-            Text("\(displayPoints) pts")
-                .font(.system(size: 14, weight: .bold))
-                .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(isCurrentUser ?
+                          Color(red: 1.0, green: 0.4, blue: 0.4).opacity(0.08) :
+                          Color(colorScheme == .dark ? .systemGray6 : .systemBackground))
+                    .shadow(color: .black.opacity(0.05), radius: 8, y: 2)
+            )
+            .overlay(
+                isCurrentUser ?
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(Color(red: 1.0, green: 0.4, blue: 0.4).opacity(0.3), lineWidth: 1)
+                : nil
+            )
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(isCurrentUser ?
-                      Color(red: 1.0, green: 0.4, blue: 0.4).opacity(0.08) :
-                      Color(colorScheme == .dark ? .systemGray6 : .systemBackground))
-                .shadow(color: .black.opacity(0.05), radius: 8, y: 2)
-        )
-        .overlay(
-            isCurrentUser ?
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(Color(red: 1.0, green: 0.4, blue: 0.4).opacity(0.3), lineWidth: 1)
-            : nil
-        )
+        .buttonStyle(.plain)
+        .allowsHitTesting(navigator.canNavigateToProfile(userId: entry.userId))
     }
 }
 
-// MARK: - Leaderboard Row
+// MARK: - Leaderboard Row (Tappable for profile navigation)
 
 struct LeaderboardRow: View {
     let entry: LeaderboardEntry
     let currentUserId: String?
     var selectedTimeframe: RankTimeframe = .allTime
     @Environment(\.colorScheme) private var colorScheme
+    @ObservedObject private var navigator = NavigationCoordinator.shared
     
     private var isCurrentUser: Bool { entry.userId == currentUserId }
     
@@ -554,52 +563,58 @@ struct LeaderboardRow: View {
     }
     
     var body: some View {
-        HStack(spacing: 12) {
-            Text("#\(entry.rank)")
-                .font(.system(size: 15, weight: .bold))
-                .foregroundColor(.secondary)
-                .frame(width: 40, alignment: .leading)
-            
-            // Avatar - Instagram style
-            ZStack {
-                Circle()
-                    .fill(Color(red: 1.0, green: 0.4, blue: 0.4).opacity(0.2))
-                    .frame(width: 44, height: 44)
+        Button {
+            navigator.showProfile(userId: entry.userId)
+        } label: {
+            HStack(spacing: 12) {
+                Text("#\(entry.rank)")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundColor(.secondary)
+                    .frame(width: 40, alignment: .leading)
                 
-                AvatarImageView(
-                    url: entry.avatarUrl,
-                    size: 40,
-                    placeholder: "person.fill"
-                )
-            }
-            
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
-                    Text(entry.displayName ?? entry.handle)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundColor(.primary)
+                // Avatar - Instagram style
+                ZStack {
+                    Circle()
+                        .fill(Color(red: 1.0, green: 0.4, blue: 0.4).opacity(0.2))
+                        .frame(width: 44, height: 44)
                     
-                    if isCurrentUser {
-                        Text("(You)")
-                            .font(.system(size: 12))
-                            .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
-                    }
+                    AvatarImageView(
+                        url: entry.avatarUrl,
+                        size: 40,
+                        placeholder: "person.fill"
+                    )
                 }
                 
-                Text("@\(entry.handle)")
-                    .font(.system(size: 13))
-                    .foregroundColor(.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 4) {
+                        Text(entry.displayName ?? entry.handle)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(.primary)
+                        
+                        if isCurrentUser {
+                            Text("(You)")
+                                .font(.system(size: 12))
+                                .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
+                        }
+                    }
+                    
+                    Text("@\(entry.handle)")
+                        .font(.system(size: 13))
+                        .foregroundColor(.secondary)
+                }
+                
+                Spacer()
+                
+                Text("\(displayPoints) pts")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
             }
-            
-            Spacer()
-            
-            Text("\(displayPoints) pts")
-                .font(.system(size: 15, weight: .bold))
-                .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(isCurrentUser ? Color(red: 1.0, green: 0.4, blue: 0.4).opacity(0.08) : Color.clear)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(isCurrentUser ? Color(red: 1.0, green: 0.4, blue: 0.4).opacity(0.08) : Color.clear)
+        .buttonStyle(.plain)
+        .allowsHitTesting(navigator.canNavigateToProfile(userId: entry.userId))
     }
 }
 

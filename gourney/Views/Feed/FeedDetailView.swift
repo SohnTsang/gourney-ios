@@ -1,7 +1,9 @@
 // Views/Feed/FeedDetailView.swift
 // Full-screen visit detail with comments
 // Uses shared PhotoCarouselView for Instagram-style dynamic height
+// Double-tap to like (won't unlike if already liked)
 // FIX: Added notification listener for seamless visit updates
+// Avatar taps now navigate via NavigationCoordinator
 
 import SwiftUI
 
@@ -12,11 +14,11 @@ struct FeedDetailView: View {
     @StateObject private var viewModel: FeedDetailViewModel
     @State private var displayItem: FeedItem  // Mutable copy for UI updates
     @State private var currentPhotoIndex = 0
-    @State private var showFullscreenPhoto = false
     @State private var showDeleteAlert = false
     @State private var commentToDelete: Comment?
     @State private var showHeader = true
     @State private var lastScrollY: CGFloat = 0
+    @State private var showLikeAnimation = false
     @FocusState private var isCommentFieldFocused: Bool
     
     // Visit menu states
@@ -27,6 +29,11 @@ struct FeedDetailView: View {
     @State private var showPlaceDetail = false
     @State private var showAddVisitFromPlace = false
     @State private var pendingAddVisit = false
+    
+    // Local like state (since ProfileVisit doesn't track likes)
+    @State private var localIsLiked: Bool = false
+    @State private var localLikeCount: Int = 0
+    @State private var pendingLikeTask: Task<Void, Never>?
     
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
@@ -40,6 +47,9 @@ struct FeedDetailView: View {
         self.feedViewModel = feedViewModel
         self._displayItem = State(initialValue: feedItem)
         self._viewModel = StateObject(wrappedValue: FeedDetailViewModel(visitId: feedItem.id))
+        // Initialize local like state from feedItem
+        self._localIsLiked = State(initialValue: feedItem.isLiked)
+        self._localLikeCount = State(initialValue: feedItem.likeCount)
     }
     
     var body: some View {
@@ -53,15 +63,9 @@ struct FeedDetailView: View {
                 
                 ScrollView {
                     VStack(spacing: 0) {
-                        // Photo carousel
+                        // Photo carousel with double-tap to like
                         if !displayItem.photos.isEmpty {
-                            PhotoCarouselView(
-                                photos: displayItem.photos,
-                                currentIndex: $currentPhotoIndex,
-                                onPhotoTap: {
-                                    showFullscreenPhoto = true
-                                }
-                            )
+                            photoSection
                         }
                         
                         // Visit content
@@ -119,19 +123,16 @@ struct FeedDetailView: View {
             viewModel.onCommentCountChanged = { delta in
                 feedViewModel.updateCommentCount(for: displayItem.id, delta: delta)
             }
+            // Fetch actual like status (ProfileVisit doesn't have this data)
+            fetchLikeStatus()
         }
         .onDisappear {
             viewModel.cleanup()
+            pendingLikeTask?.cancel()
         }
         // Listen for visit updates from notification
         .onReceive(NotificationCenter.default.publisher(for: .visitDidUpdate)) { notification in
             handleVisitUpdate(notification)
-        }
-        .fullScreenCover(isPresented: $showFullscreenPhoto) {
-            FullscreenPhotoViewer(
-                photos: displayItem.photos,
-                currentIndex: $currentPhotoIndex
-            )
         }
         .navigationDestination(isPresented: $showEditVisit) {
             EditVisitView(feedItem: displayItem) { updatedItem in
@@ -231,6 +232,56 @@ struct FeedDetailView: View {
         .loadingOverlay(isShowing: isDeletingVisit, message: "Deleting...")
     }
     
+    // MARK: - Photo Section with Double-Tap to Like
+    
+    private var photoSection: some View {
+        ZStack {
+            PhotoCarouselView(
+                photos: displayItem.photos,
+                currentIndex: $currentPhotoIndex,
+                onPhotoTap: nil  // Remove single-tap preview
+            )
+            
+            // Double-tap like heart animation
+            if showLikeAnimation {
+                Image(systemName: "heart.fill")
+                    .font(.system(size: 80))
+                    .foregroundColor(.white)
+                    .shadow(color: .black.opacity(0.3), radius: 10)
+                    .transition(.scale.combined(with: .opacity))
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) {
+            handleDoubleTapLike()
+        }
+        // Single tap does nothing - no image preview
+    }
+    
+    // MARK: - Double Tap Like Handler
+    
+    private func handleDoubleTapLike() {
+        // Only like if not already liked (Instagram behavior)
+        if !currentIsLiked {
+            toggleLike()
+        }
+        
+        // Always show animation on double-tap
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+            showLikeAnimation = true
+        }
+        
+        // Haptic feedback
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        
+        // Hide animation after delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+            withAnimation(.easeOut(duration: 0.3)) {
+                showLikeAnimation = false
+            }
+        }
+    }
+    
     // MARK: - Handle Visit Update Notification
     
     private func handleVisitUpdate(_ notification: Notification) {
@@ -326,14 +377,17 @@ struct FeedDetailView: View {
     
     private var visitContent: some View {
         VStack(alignment: .leading, spacing: 12) {
-            // User header
+            // User header - avatar and username now tappable via NavigationCoordinator
             HStack(spacing: 10) {
-                AvatarView(url: displayItem.user.avatarUrl, size: 40)
+                AvatarView(url: displayItem.user.avatarUrl, size: 40, userId: displayItem.user.id)
                 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(displayItem.user.displayNameOrHandle)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundColor(.primary)
+                    TappableUsername(
+                        username: displayItem.user.displayNameOrHandle,
+                        userId: displayItem.user.id,
+                        font: .system(size: 15, weight: .semibold),
+                        color: .primary
+                    )
                     
                     Text(timeAgoString(from: displayItem.createdAt))
                         .font(.system(size: 12))
@@ -401,7 +455,7 @@ struct FeedDetailView: View {
                 count: currentLikeCount > 0 ? currentLikeCount : nil,
                 isActive: currentIsLiked,
                 action: {
-                    feedViewModel.toggleLike(for: feedItem)
+                    toggleLike()
                 }
             )
             
@@ -434,16 +488,141 @@ struct FeedDetailView: View {
         }
     }
     
+    // MARK: - Toggle Like (same pattern as FeedViewModel)
+    
+    private func toggleLike() {
+        // Optimistic UI update immediately
+        localIsLiked.toggle()
+        localLikeCount += localIsLiked ? 1 : -1
+        localLikeCount = max(0, localLikeCount)
+        
+        print("💫 [FeedDetail] Optimistic: liked=\(localIsLiked), count=\(localLikeCount)")
+        
+        // Haptic feedback
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        
+        // Cancel any pending API call
+        pendingLikeTask?.cancel()
+        
+        // Capture the final desired state
+        let visitId = displayItem.id
+        let finalDesiredState = localIsLiked
+        
+        // Debounce: wait 300ms before making API call
+        pendingLikeTask = Task {
+            try? await Task.sleep(nanoseconds: 300_000_000) // 300ms
+            
+            guard !Task.isCancelled else {
+                print("🚫 [FeedDetail] Like task cancelled")
+                return
+            }
+            
+            await syncLikeWithServer(visitId: visitId, desiredState: finalDesiredState)
+        }
+    }
+    
+    private func syncLikeWithServer(visitId: String, desiredState: Bool) async {
+        // Check if UI state still matches what we want to sync
+        guard localIsLiked == desiredState else {
+            print("⚠️ [FeedDetail] UI state changed, skipping sync")
+            return
+        }
+        
+        do {
+            let path = "/functions/v1/likes-toggle?visit_id=\(visitId)"
+            print("📤 [FeedDetail] Calling API: \(path)")
+            
+            struct LikeToggleResponse: Codable {
+                let visitId: String
+                let liked: Bool
+                let likeCount: Int
+                let createdAt: String?
+            }
+            
+            let response: LikeToggleResponse = try await SupabaseClient.shared.post(
+                path: path,
+                body: [:],
+                requiresAuth: true
+            )
+            
+            guard !Task.isCancelled else { return }
+            
+            // If server state matches desired state, sync the count
+            if response.liked == desiredState {
+                localLikeCount = response.likeCount
+                print("✅ [FeedDetail] Synced - liked: \(response.liked), count: \(response.likeCount)")
+            } else {
+                // Server disagrees - retry
+                print("⚠️ [FeedDetail] Server mismatch, retrying...")
+                await syncLikeWithServer(visitId: visitId, desiredState: desiredState)
+                return
+            }
+            
+            // Update FeedViewModel if it has this item
+            feedViewModel.updateLikeState(visitId: visitId, isLiked: response.liked, likeCount: response.likeCount)
+            
+        } catch {
+            guard !Task.isCancelled else { return }
+            print("❌ [FeedDetail] Like error: \(error.localizedDescription)")
+            // Don't revert - keep UI state as user intended
+        }
+    }
+    
     private var currentIsLiked: Bool {
-        feedViewModel.items.first(where: { $0.id == displayItem.id })?.isLiked ?? displayItem.isLiked
+        localIsLiked
     }
     
     private var currentLikeCount: Int {
-        feedViewModel.items.first(where: { $0.id == displayItem.id })?.likeCount ?? displayItem.likeCount
+        localLikeCount
     }
     
     private var currentCommentCount: Int {
         feedViewModel.items.first(where: { $0.id == displayItem.id })?.commentCount ?? displayItem.commentCount
+    }
+    
+    // MARK: - Fetch Like Status
+    
+    private func fetchLikeStatus() {
+        // If we already have valid data from FeedViewModel, use that
+        if let feedItem = feedViewModel.getItem(id: displayItem.id) {
+            localIsLiked = feedItem.isLiked
+            localLikeCount = feedItem.likeCount
+            print("📋 [FeedDetail] Using FeedViewModel state: liked=\(localIsLiked), count=\(localLikeCount)")
+            return
+        }
+        
+        // Otherwise fetch from API (for visits opened from ProfileView)
+        Task {
+            do {
+                let path = "/functions/v1/likes-list?visit_id=\(displayItem.id)&limit=1"
+                print("📡 [FeedDetail] Fetching like status...")
+                
+                struct LikesListResponse: Codable {
+                    let visitId: String
+                    let likes: [LikeUser]
+                    let likeCount: Int
+                    let hasLiked: Bool
+                    let nextCursor: String?
+                    
+                    struct LikeUser: Codable {
+                        let userId: String
+                    }
+                }
+                
+                let response: LikesListResponse = try await SupabaseClient.shared.get(
+                    path: path,
+                    requiresAuth: true
+                )
+                
+                localIsLiked = response.hasLiked
+                localLikeCount = response.likeCount
+                print("✅ [FeedDetail] Like status: liked=\(localIsLiked), count=\(localLikeCount)")
+                
+            } catch {
+                print("⚠️ [FeedDetail] Failed to fetch like status: \(error.localizedDescription)")
+                // Keep initial values from feedItem
+            }
+        }
     }
     
     // MARK: - Comments Section
@@ -627,13 +806,18 @@ struct CommentRowView: View {
     
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            AvatarView(url: comment.userAvatarUrl, size: 32)
+            // Avatar with userId for automatic navigation
+            AvatarView(url: comment.userAvatarUrl, size: 32, userId: comment.userId)
             
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
-                    Text(comment.displayName)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.primary)
+                    // Username also tappable
+                    TappableUsername(
+                        username: comment.displayName,
+                        userId: comment.userId,
+                        font: .system(size: 14, weight: .semibold),
+                        color: .primary
+                    )
                     
                     Text(comment.timeAgo)
                         .font(.system(size: 12))

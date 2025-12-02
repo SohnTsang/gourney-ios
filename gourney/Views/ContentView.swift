@@ -19,6 +19,8 @@ struct ContentView: View {
         // IMPORTANT: remove any other .onTapGesture { hideKeyboard() } you added globally
         .background(InstallGlobalTapToDismissKeyboard())
         .withToast()  // ✅ Add toast at root level
+        // NOTE: Profile navigation is handled by .withProfileNavigationDestination() in individual views
+        // Do NOT use .withProfileNavigation() here - that's the old overlay approach
         .animation(.easeInOut(duration: 0.3), value: authManager.isAuthenticated)
         .animation(.easeInOut(duration: 0.3), value: authManager.needsProfileCompletion)
         .task {

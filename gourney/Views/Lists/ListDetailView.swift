@@ -1,5 +1,6 @@
 // Views/Lists/ListDetailView.swift
 // ✅ Redesigned with Spotify-style centered cover image + owner info section
+// ✅ Avatar tap navigation via NavigationCoordinator
 
 import SwiftUI
 import PhotosUI
@@ -71,14 +72,18 @@ struct ListDetailView: View {
                             }
                         )
                         
-                        // ✅ Owner Info Section (Avatar + DisplayName + Handle)
+                        // ✅ Owner Info Section (Avatar + DisplayName + Handle) - Tappable
                         OwnerInfoSection(
                             avatarUrl: viewModel.ownerAvatarUrl,
                             displayName: viewModel.ownerDisplayName,
-                            handle: isReadOnly ? ownerHandle : viewModel.ownerHandle
+                            ownerHandle: isReadOnly ? ownerHandle : viewModel.ownerHandle,
+                            ownerId: viewModel.ownerId,
+                            onTap: {
+                                if let ownerId = viewModel.ownerId {
+                                    navigateToUserProfile(userId: ownerId)
+                                }
+                            }
                         )
-                        .padding(.top, 16)
-                        .padding(.bottom, 8)
                         
                         // ✅ Stats Row - Places count and Likes
                         VStack(spacing: 12) {
@@ -300,6 +305,13 @@ struct ListDetailView: View {
         }
     }
     
+    // MARK: - Navigate to User Profile
+    
+    private func navigateToUserProfile(userId: String) {
+        // ✅ Use NavigationCoordinator for centralized navigation
+        NavigationCoordinator.shared.showProfile(userId: userId)
+    }
+    
     // MARK: - Delete List
     
     private func deleteList() async {
@@ -335,35 +347,50 @@ struct ListDetailView: View {
 struct OwnerInfoSection: View {
     let avatarUrl: String?
     let displayName: String?
-    let handle: String?
+    let ownerHandle: String?  // ✅ Renamed from 'handle' to 'ownerHandle'
+    let ownerId: String?
+    var onTap: (() -> Void)? = nil
     
     @Environment(\.colorScheme) private var colorScheme
     
     var body: some View {
-        HStack(spacing: 10) {
-            // Avatar
-            AvatarView(url: avatarUrl, size: 40)
-            
-            // Display Name + Handle
-            VStack(alignment: .leading, spacing: 2) {
-                if let displayName = displayName, !displayName.isEmpty {
-                    Text(displayName)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundColor(.primary)
+        Button {
+            onTap?()
+        } label: {
+            HStack(spacing: 10) {
+                // Avatar - Pass ownerId for tappable navigation
+                AvatarView(url: avatarUrl, size: 40, userId: ownerId)
+                
+                // Display Name + Handle
+                VStack(alignment: .leading, spacing: 2) {
+                    if let displayName = displayName, !displayName.isEmpty {
+                        Text(displayName)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(.primary)
+                    }
+                    
+                    if let ownerHandle = ownerHandle {
+                        Text("@\(ownerHandle)")
+                            .font(.system(size: 13))
+                            .foregroundColor(.secondary)
+                    }
                 }
                 
-                if let handle = handle {
-                    Text("@\(handle)")
-                        .font(.system(size: 13))
-                        .foregroundColor(.secondary)
+                Spacer()
+                
+                if onTap != nil {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.secondary.opacity(0.5))
                 }
             }
-            
-            Spacer()
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(colorScheme == .dark ? Color(.systemBackground) : Color.white)
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(colorScheme == .dark ? Color(.systemBackground) : Color.white)
+        .buttonStyle(.plain)
+        .disabled(onTap == nil)
     }
 }
 
@@ -781,6 +808,7 @@ class ListDetailViewModel: ObservableObject {
     @Published var likeScale: CGFloat = 1.0
     
     // ✅ Owner info from API
+    @Published var ownerId: String?
     @Published var ownerHandle: String?
     @Published var ownerDisplayName: String?
     @Published var ownerAvatarUrl: String?
@@ -886,6 +914,7 @@ class ListDetailViewModel: ObservableObject {
                         likeStatus = (hasLiked: response.list.hasLiked, likesCount: response.list.likesCount)
                         
                         // ✅ Set owner info from API response
+                        ownerId = response.list.ownerId
                         ownerHandle = response.list.ownerHandle
                         ownerDisplayName = response.list.ownerDisplayName
                         ownerAvatarUrl = response.list.ownerAvatarUrl
