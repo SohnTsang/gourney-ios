@@ -2,57 +2,66 @@
 // ✅ Production-grade with Instagram-style avatar loading
 // ✅ Fixed: Seamless tab switching with proper loading states
 // ✅ Updated: Location selector now uses slide-up sheet (same as ListDetailView)
-// Avatar taps now navigate via NavigationCoordinator
+// ✅ Avatar taps now navigate via NavigationCoordinator with NavigationStack
 
 import SwiftUI
 
 struct RankView: View {
     @StateObject private var viewModel = RankViewModel()
+    @ObservedObject private var navigator = NavigationCoordinator.shared
     @Environment(\.colorScheme) private var colorScheme
     @State private var showLocationSheet = false
     
     var body: some View {
-        ZStack {
-            Color(colorScheme == .dark ? .black : .white)
-                .ignoresSafeArea()
-            
-            VStack(spacing: 0) {
-                customNavBar
+        // ✅ Added NavigationStack for profile navigation
+        NavigationStack {
+            ZStack {
+                Color(colorScheme == .dark ? .black : .white)
+                    .ignoresSafeArea()
                 
-                timeframeFilter
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 12)
-                
-                // ✅ Show loading spinner whenever isLoading is true
-                if viewModel.isLoading {
-                    Spacer()
-                    ProgressView()
-                        .tint(Color(red: 1.0, green: 0.4, blue: 0.4))
-                    Spacer()
-                } else {
-                    ZStack(alignment: .bottom) {
-                        ScrollView {
-                            VStack(spacing: 16) {
-                                if let error = viewModel.errorMessage {
-                                    errorView(error)
-                                } else if viewModel.entries.isEmpty {
-                                    emptyView
-                                } else {
-                                    leaderboardContent
+                VStack(spacing: 0) {
+                    customNavBar
+                    
+                    timeframeFilter
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 12)
+                    
+                    // ✅ Show loading spinner whenever isLoading is true
+                    if viewModel.isLoading {
+                        Spacer()
+                        ProgressView()
+                            .tint(Color(red: 1.0, green: 0.4, blue: 0.4))
+                        Spacer()
+                    } else {
+                        ZStack(alignment: .bottom) {
+                            ScrollView {
+                                VStack(spacing: 16) {
+                                    if let error = viewModel.errorMessage {
+                                        errorView(error)
+                                    } else if viewModel.entries.isEmpty {
+                                        emptyView
+                                    } else {
+                                        leaderboardContent
+                                    }
                                 }
+                                .padding(.top, 8)
                             }
-                            .padding(.top, 8)
-                        }
-                        .refreshable {
-                            await viewModel.loadLeaderboard()
-                        }
-                        
-                        // Show rank card when we have data
-                        if !viewModel.entries.isEmpty {
-                            fixedMyRankCard
+                            .refreshable {
+                                await viewModel.loadLeaderboard()
+                            }
+                            
+                            // Show rank card when we have data
+                            if !viewModel.entries.isEmpty {
+                                fixedMyRankCard
+                            }
                         }
                     }
                 }
+            }
+            .navigationBarHidden(true)
+            // ✅ Profile navigation destination
+            .navigationDestination(item: $navigator.navigateToProfileUserId) { userId in
+                ProfileView(userId: userId)
             }
         }
         .onAppear { viewModel.onAppear() }
@@ -72,6 +81,12 @@ struct RankView: View {
                 }
             )
         }
+        // ✅ Pop to root when same tab is tapped
+        .onReceive(navigator.$popToRootTab) { tabIndex in
+            if tabIndex == 3 {
+                navigator.navigateToProfileUserId = nil
+            }
+        }
     }
     
     // MARK: - Navigation Bar
@@ -79,7 +94,7 @@ struct RankView: View {
     private var customNavBar: some View {
         HStack {
             Text("Leaderboard")
-                .font(.system(size: 34, weight: .bold))
+                .font(.system(size: 18, weight: .bold))
                 .foregroundColor(.primary)
             
             Spacer()
@@ -102,7 +117,7 @@ struct RankView: View {
             }
         }
         .padding(.horizontal, 20)
-        .padding(.top, 16)
+        .padding(.top, 20)
         .padding(.bottom, 12)
     }
     

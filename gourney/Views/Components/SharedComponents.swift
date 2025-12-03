@@ -352,6 +352,449 @@ private func formatTimeAgo(_ date: Date) -> String {
     return "\(Int(interval / 604800))w"
 }
 
+// MARK: - ═══════════════════════════════════════════════════════════════════
+// MARK: - SEARCH COMPONENTS (Instagram-style)
+// MARK: - ═══════════════════════════════════════════════════════════════════
+
+// MARK: - Search Tab Configuration
+
+struct SearchTab: Identifiable, Equatable {
+    let id: String
+    let title: String
+    let icon: String?
+    
+    init(id: String, title: String, icon: String? = nil) {
+        self.id = id
+        self.title = title
+        self.icon = icon
+    }
+    
+    // Common presets
+    static let users = SearchTab(id: "users", title: "Users", icon: "person")
+    static let places = SearchTab(id: "places", title: "Places", icon: "mappin")
+    static let posts = SearchTab(id: "posts", title: "Posts", icon: "square.grid.2x2")
+    static let tags = SearchTab(id: "tags", title: "Tags", icon: "number")
+    static let top = SearchTab(id: "top", title: "Top", icon: nil)
+}
+
+// MARK: - Search Bar Button (Tappable placeholder - triggers full search)
+
+struct SearchBarButton: View {
+    let placeholder: String
+    var icon: String = "magnifyingglass"
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 16))
+                    .foregroundColor(.secondary)
+                
+                Text(placeholder)
+                    .font(.system(size: 15))
+                    .foregroundColor(.secondary)
+                
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 36)
+            .background(Color(.systemGray6))
+            .cornerRadius(10)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Search Text Field (Inline search - for lists, filters)
+// Matches SearchBarButton styling exactly
+
+struct SearchTextField: View {
+    @Binding var text: String
+    var placeholder: String = "Search"
+    var icon: String = "magnifyingglass"
+    var showClearButton: Bool = true
+    
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.system(size: 16))
+                .foregroundColor(.secondary)
+            
+            ZStack(alignment: .leading) {
+                // Custom placeholder to match SearchBarButton color exactly
+                if text.isEmpty {
+                    Text(placeholder)
+                        .font(.system(size: 15))
+                        .foregroundColor(.secondary)
+                }
+                
+                TextField("", text: $text)
+                    .font(.system(size: 15))
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+            }
+            
+            Spacer()
+            
+            if showClearButton && !text.isEmpty {
+                Button {
+                    text = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 16))
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 36)
+        .background(Color(.systemGray6))
+        .cornerRadius(10)
+    }
+}
+
+// MARK: - Search Overlay View (Full-screen Instagram-style search)
+
+struct SearchOverlayView<Content: View>: View {
+    @Binding var isPresented: Bool
+    @Binding var searchText: String
+    let placeholder: String
+    let tabs: [SearchTab]?
+    @Binding var selectedTabId: String?
+    @ViewBuilder let content: () -> Content
+    
+    @Environment(\.colorScheme) private var colorScheme
+    @FocusState private var isSearchFocused: Bool
+    
+    private var backgroundColor: Color {
+        colorScheme == .dark ? Color.black : Color.white
+    }
+    
+    init(
+        isPresented: Binding<Bool>,
+        searchText: Binding<String>,
+        placeholder: String = "Search",
+        tabs: [SearchTab]? = nil,
+        selectedTabId: Binding<String?> = .constant(nil),
+        @ViewBuilder content: @escaping () -> Content
+    ) {
+        self._isPresented = isPresented
+        self._searchText = searchText
+        self.placeholder = placeholder
+        self.tabs = tabs
+        self._selectedTabId = selectedTabId
+        self.content = content
+    }
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Search Header
+            searchHeader
+            
+            // Tab Picker (if multiple tabs provided)
+            if let tabs = tabs, tabs.count > 1 {
+                tabPicker(tabs)
+            }
+            
+            // Divider
+            Divider()
+            
+            // Content (results, recent searches, etc.)
+            content()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .background(backgroundColor.ignoresSafeArea())
+        .onAppear {
+            // Auto-focus search field with slight delay for animation
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                isSearchFocused = true
+            }
+        }
+    }
+    
+    // MARK: - Search Header
+    
+    private var searchHeader: some View {
+        HStack(spacing: 12) {
+            // Search Field
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 16))
+                    .foregroundColor(.secondary)
+                
+                TextField(placeholder, text: $searchText)
+                    .font(.system(size: 15))
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .focused($isSearchFocused)
+                    .submitLabel(.search)
+                
+                if !searchText.isEmpty {
+                    Button {
+                        searchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 16))
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(Color(.systemGray6))
+            .cornerRadius(10)
+            
+            // Cancel Button
+            Button {
+                isSearchFocused = false
+                searchText = ""
+                withAnimation(.easeOut(duration: 0.25)) {
+                    isPresented = false
+                }
+            } label: {
+                Text("Cancel")
+                    .font(.system(size: 16))
+                    .foregroundColor(.primary)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(backgroundColor)
+    }
+    
+    // MARK: - Tab Picker (Instagram-style underline)
+    
+    private func tabPicker(_ tabs: [SearchTab]) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 0) {
+                ForEach(tabs) { tab in
+                    tabButton(tab, isSelected: selectedTabId == tab.id)
+                }
+            }
+            .padding(.horizontal, 8)
+        }
+        .background(backgroundColor)
+    }
+    
+    private func tabButton(_ tab: SearchTab, isSelected: Bool) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                selectedTabId = tab.id
+            }
+        } label: {
+            VStack(spacing: 8) {
+                HStack(spacing: 6) {
+                    if let icon = tab.icon {
+                        Image(systemName: icon)
+                            .font(.system(size: 13))
+                    }
+                    Text(tab.title)
+                        .font(.system(size: 14, weight: isSelected ? .semibold : .regular))
+                }
+                .foregroundColor(isSelected ? .primary : .secondary)
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 10)
+            }
+            .overlay(alignment: .bottom) {
+                if isSelected {
+                    Rectangle()
+                        .fill(Color.primary)
+                        .frame(height: 1)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Generic Search Row (Reusable row for search results)
+// Note: Named GenericSearchRow to avoid conflict with SearchPlaceOverlay's SearchResultRow
+
+struct GenericSearchRow: View {
+    let imageUrl: String?
+    let title: String
+    var subtitle: String? = nil
+    var trailingText: String? = nil
+    var imageSize: CGFloat = 44
+    var showChevron: Bool = false
+    var isPlaceholder: Bool = false  // For user avatar placeholder
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                // Image/Avatar
+                if isPlaceholder {
+                    AvatarView(url: imageUrl, size: imageSize)
+                } else if let url = imageUrl {
+                    AsyncImage(url: URL(string: url)) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: imageSize, height: imageSize)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                        case .failure, .empty:
+                            placeholderImage
+                        @unknown default:
+                            placeholderImage
+                        }
+                    }
+                } else {
+                    placeholderImage
+                }
+                
+                // Text content
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+                    
+                    if let subtitle = subtitle {
+                        Text(subtitle)
+                            .font(.system(size: 13))
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                
+                Spacer()
+                
+                // Trailing
+                if let trailing = trailingText {
+                    Text(trailing)
+                        .font(.system(size: 13))
+                        .foregroundColor(.secondary)
+                }
+                
+                if showChevron {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(Color(.systemGray3))
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+    
+    private var placeholderImage: some View {
+        RoundedRectangle(cornerRadius: 8)
+            .fill(Color(.systemGray5))
+            .frame(width: imageSize, height: imageSize)
+            .overlay(
+                Image(systemName: "photo")
+                    .font(.system(size: imageSize * 0.4))
+                    .foregroundColor(.secondary)
+            )
+    }
+}
+
+// MARK: - Recent Search Item
+
+struct RecentSearchItem: View {
+    let icon: String
+    let text: String
+    let onTap: () -> Void
+    let onRemove: () -> Void
+    
+    var body: some View {
+        HStack(spacing: 12) {
+            // Icon
+            Image(systemName: icon)
+                .font(.system(size: 16))
+                .foregroundColor(.secondary)
+                .frame(width: 24)
+            
+            // Text
+            Text(text)
+                .font(.system(size: 15))
+                .foregroundColor(.primary)
+                .lineLimit(1)
+            
+            Spacer()
+            
+            // Remove button
+            Button(action: onRemove) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.secondary)
+                    .padding(8)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onTap)
+    }
+}
+
+// MARK: - Search Empty State
+
+struct SearchEmptyState: View {
+    var icon: String = "magnifyingglass"
+    var title: String = "No Results"
+    var message: String = "Try searching for something else"
+    
+    var body: some View {
+        VStack(spacing: 12) {
+            Spacer()
+            
+            Image(systemName: icon)
+                .font(.system(size: 48))
+                .foregroundColor(.secondary.opacity(0.5))
+            
+            Text(title)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundColor(.primary)
+            
+            Text(message)
+                .font(.system(size: 14))
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 40)
+            
+            Spacer()
+        }
+    }
+}
+
+// MARK: - Search Section Header
+
+struct SearchSectionHeader: View {
+    let title: String
+    var actionTitle: String? = nil
+    var action: (() -> Void)? = nil
+    
+    var body: some View {
+        HStack {
+            Text(title)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(.secondary)
+            
+            Spacer()
+            
+            if let actionTitle = actionTitle, let action = action {
+                Button(action: action) {
+                    Text(actionTitle)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(GourneyColors.coral)
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
+}
+
 // MARK: - Previews
 
 #Preview("Avatar") {
@@ -399,4 +842,62 @@ private func formatTimeAgo(_ date: Date) -> String {
 #Preview("Tappable Username") {
     TappableUsername(username: "foodie_lover", userId: "user-123")
         .padding()
+}
+
+#Preview("Search Bar Button") {
+    VStack(spacing: 16) {
+        SearchBarButton(placeholder: "Search places, users") { }
+        SearchBarButton(placeholder: "Search", icon: "magnifyingglass") { }
+    }
+    .padding()
+}
+
+#Preview("Search Text Field") {
+    struct PreviewWrapper: View {
+        @State private var text = ""
+        var body: some View {
+            VStack(spacing: 16) {
+                SearchTextField(text: $text, placeholder: "Search users...")
+                SearchTextField(text: .constant("ramen"), placeholder: "Search")
+            }
+            .padding()
+        }
+    }
+    return PreviewWrapper()
+}
+
+#Preview("Generic Search Row") {
+    VStack(spacing: 0) {
+        GenericSearchRow(
+            imageUrl: nil,
+            title: "foodie_lover",
+            subtitle: "John Smith • 45 visits",
+            isPlaceholder: true
+        ) { }
+        Divider().padding(.leading, 72)
+        GenericSearchRow(
+            imageUrl: nil,
+            title: "AFURI Harajuku",
+            subtitle: "Ramen • Shibuya, Tokyo",
+            trailingText: "4.5★",
+            showChevron: true
+        ) { }
+    }
+}
+
+#Preview("Recent Searches") {
+    VStack(spacing: 0) {
+        SearchSectionHeader(title: "Recent", actionTitle: "Clear All") { }
+        RecentSearchItem(icon: "clock", text: "Ramen in Shibuya", onTap: { }, onRemove: { })
+        RecentSearchItem(icon: "person", text: "@foodie_lover", onTap: { }, onRemove: { })
+        RecentSearchItem(icon: "mappin", text: "AFURI Harajuku", onTap: { }, onRemove: { })
+    }
+}
+
+#Preview("Search Empty State") {
+    SearchEmptyState(
+        icon: "magnifyingglass",
+        title: "No Results",
+        message: "Try searching for something else"
+    )
 }

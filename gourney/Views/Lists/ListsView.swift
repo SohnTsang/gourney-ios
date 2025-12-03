@@ -297,7 +297,7 @@ struct ListsView: View {
                     list: list,
                     isPresented: $showSettings,
                     onSave: { updatedList in
-                        // ✅ Update in ViewModel
+                        // ✅ FIX: Use viewModel method for consistent updates
                         viewModel.updateList(updatedList)
                         listToEdit = nil
                     }
@@ -346,7 +346,6 @@ struct ListsView: View {
             }
         }
         .navigationBarHidden(true)
-        // ✅ FIX: Updated navigation destination with proper callbacks
         .navigationDestination(isPresented: Binding(
             get: { selectedList != nil },
             set: { if !$0 { selectedList = nil } }
@@ -357,18 +356,15 @@ struct ListsView: View {
                     isReadOnly: false,
                     ownerHandle: nil,
                     onListUpdated: { updatedList in
-                        // ✅ Update the list in ViewModel immediately
+                        // ✅ FIX: Update the full list in ViewModel for seamless sync
                         viewModel.updateList(updatedList)
-                        // ✅ Also update selectedList so TopBar shows new title
+                        // Also update selectedList so navigation title updates
                         selectedList = updatedList
-                        print("✅ [ListsView] List updated: \(updatedList.title)")
                     },
                     onListDeleted: { deletedListId in
-                        // ✅ Remove from ViewModel immediately
+                        // ✅ FIX: Remove list from ViewModel when deleted
                         viewModel.removeList(id: deletedListId)
-                        // ✅ Clear selection
                         selectedList = nil
-                        print("✅ [ListsView] List deleted: \(deletedListId)")
                     }
                 )
             }
@@ -403,10 +399,8 @@ struct ListsView: View {
             onConfirm: {
                 if let list = listToDelete {
                     Task {
-                        let success = await viewModel.deleteList(listId: list.id)
-                        if success {
-                            listToDelete = nil
-                        }
+                        _ = await viewModel.deleteList(listId: list.id)
+                        listToDelete = nil
                     }
                 }
             }
@@ -607,18 +601,14 @@ struct ListGridItem: View {
                         case .failure(_):
                             placeholderWithError
                         case .empty:
-                            ZStack {
-                                placeholderWithoutError
-                                ProgressView()
-                                    .tint(GourneyColors.coral.opacity(0.6))
-                            }
+                            placeholderWithLoading
                         @unknown default:
-                            placeholderWithoutError
+                            placeholderWithLoading
                         }
                     }
                 }
                 
-                // Title overlay (bottom) with item count and like count
+                // Title overlay (bottom) with place count and like count
                 VStack(alignment: .leading, spacing: 4) {
                     Spacer()
                     
@@ -641,7 +631,7 @@ struct ListGridItem: View {
                         
                         Spacer()
                         
-                        // ✅ Like count (bottom right) - only if showLikes and has likes
+                        // ✅ Like count (bottom right) - no background
                         if showLikes {
                             HStack(spacing: 3) {
                                 Image(systemName: "heart.fill")
@@ -663,137 +653,21 @@ struct ListGridItem: View {
                     )
                 )
             }
-            .frame(width: geometry.size.width, height: geometry.size.height)
         }
         .aspectRatio(1, contentMode: .fit)  // ✅ Square aspect ratio
+        .clipped()
         .clipShape(RoundedRectangle(cornerRadius: 12))
-        .contentShape(RoundedRectangle(cornerRadius: 12))  // ✅ Fix tap area
+    }
+    
+    private var placeholderWithLoading: some View {
+        ZStack {
+            Color.gray.opacity(0.15)
+            ProgressView()
+                .tint(GourneyColors.coral.opacity(0.6))
+        }
     }
     
     private var placeholderWithError: some View {
-        ZStack {
-            LinearGradient(
-                colors: [
-                    GourneyColors.coral.opacity(0.2),
-                    GourneyColors.coral.opacity(0.1)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            
-            Image(systemName: "photo")
-                .font(.system(size: 32))
-                .foregroundColor(GourneyColors.coral.opacity(0.4))
-        }
-    }
-    
-    private var placeholderWithoutError: some View {
-        LinearGradient(
-            colors: [
-                GourneyColors.coral.opacity(0.2),
-                GourneyColors.coral.opacity(0.1)
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-    }
-}
-
-// MARK: - Following List Grid Item
-
-struct FollowingListGridItem: View {
-    let item: FollowingListItem
-    
-    @Environment(\.colorScheme) private var colorScheme
-    
-    var body: some View {
-        GeometryReader { geometry in
-            ZStack {
-                // Background/Cover Image
-                if let coverUrl = item.coverPhotoUrl {
-                    AsyncImage(url: URL(string: coverUrl)) { phase in
-                        switch phase {
-                        case .success(let image):
-                            image
-                                .resizable()
-                                .scaledToFill()
-                                .frame(width: geometry.size.width, height: geometry.size.height)
-                                .clipped()
-                        case .failure(_), .empty:
-                            placeholderView
-                        @unknown default:
-                            placeholderView
-                        }
-                    }
-                } else {
-                    placeholderView
-                }
-                
-                // Gradient overlay
-                VStack {
-                    Spacer()
-                    LinearGradient(
-                        colors: [.clear, .black.opacity(0.7)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                    .frame(height: geometry.size.height * 0.5)
-                }
-                
-                // Content overlay
-                VStack(alignment: .leading, spacing: 4) {
-                    // User info at top
-                    HStack(spacing: 6) {
-                        AvatarView(url: item.userAvatarUrl, size: 24)
-                        Text("@\(item.userHandle)")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(.white)
-                            .lineLimit(1)
-                    }
-                    .padding(6)
-                    .background(Color.black.opacity(0.4))
-                    .clipShape(Capsule())
-                    
-                    Spacer()
-                    
-                    // Title and stats
-                    Text(item.title)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(.white)
-                        .lineLimit(2)
-                    
-                    HStack {
-                        HStack(spacing: 3) {
-                            Image(systemName: "mappin.circle.fill")
-                                .font(.system(size: 10))
-                            Text("\(item.itemCount)")
-                                .font(.system(size: 11, weight: .medium))
-                        }
-                        .foregroundColor(.white.opacity(0.9))
-                        
-                        Spacer()
-                        
-                        if let likes = item.likesCount, likes > 0 {
-                            HStack(spacing: 3) {
-                                Image(systemName: "heart.fill")
-                                    .font(.system(size: 10))
-                                Text("\(likes)")
-                                    .font(.system(size: 11, weight: .medium))
-                            }
-                            .foregroundColor(.white.opacity(0.9))
-                        }
-                    }
-                }
-                .padding(8)
-            }
-            .frame(width: geometry.size.width, height: geometry.size.height)
-        }
-        .aspectRatio(1, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .contentShape(RoundedRectangle(cornerRadius: 12))
-    }
-    
-    private var placeholderView: some View {
         ZStack {
             LinearGradient(
                 colors: [
@@ -811,6 +685,105 @@ struct FollowingListGridItem: View {
     }
 }
 
+// MARK: - Following List Grid Item
+
+struct FollowingListGridItem: View {
+    let item: FollowingListItem
+    
+    @Environment(\.colorScheme) private var colorScheme
+    
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                // Cover image or placeholder
+                Group {
+                    if let coverUrl = item.coverPhotoUrl, let url = URL(string: coverUrl) {
+                        AsyncImage(url: url) { phase in
+                            switch phase {
+                            case .success(let image):
+                                image
+                                    .resizable()
+                                    .scaledToFill()
+                                    .frame(width: geometry.size.width, height: geometry.size.height)
+                                    .clipped()
+                            case .failure, .empty:
+                                placeholderView
+                            @unknown default:
+                                placeholderView
+                            }
+                        }
+                    } else {
+                        placeholderView
+                    }
+                }
+                
+                // Title + stats overlay
+                VStack(alignment: .leading, spacing: 4) {
+                    Spacer()
+                    
+                    Text(item.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.white)
+                        .lineLimit(2)
+                    
+                    // ✅ Bottom row: place count (left) and like count (right) - same as My Lists
+                    HStack {
+                        // Place count with icon
+                        HStack(spacing: 3) {
+                            Image(systemName: "mappin.circle.fill")
+                                .font(.system(size: 10))
+                            Text("\(item.itemCount)")
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                        .foregroundColor(.white.opacity(0.9))
+                        
+                        Spacer()
+                        
+                        // Like count (bottom right)
+                        HStack(spacing: 3) {
+                            Image(systemName: "heart.fill")
+                                .font(.system(size: 10))
+                            Text("\(item.likesCount ?? 0)")
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                        .foregroundColor(.white.opacity(0.9))
+                    }
+                }
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    LinearGradient(
+                        colors: [.clear, .black.opacity(0.7)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+            }
+        }
+        .aspectRatio(1, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .contentShape(RoundedRectangle(cornerRadius: 12))  // ✅ Fix tap area
+    }
+    
+    private var placeholderView: some View {
+        ZStack {
+            // ✅ Consistent coral gradient placeholder like other tabs
+            LinearGradient(
+                colors: [
+                    GourneyColors.coral.opacity(0.2),
+                    GourneyColors.coral.opacity(0.1)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            
+            Image(systemName: "person.2.fill")
+                .font(.system(size: 32))
+                .foregroundColor(GourneyColors.coral.opacity(0.5))
+        }
+    }
+}
+
 // MARK: - Popular List Grid Item
 
 struct PopularListGridItem: View {
@@ -821,97 +794,71 @@ struct PopularListGridItem: View {
     
     var body: some View {
         Button(action: onTap) {
-            GeometryReader { geometry in
+            ZStack {
+                // Placeholder design (no cover photos in lists table)
                 ZStack {
-                    // Placeholder background (no cover photos for popular lists yet)
-                    ZStack {
-                        LinearGradient(
-                            colors: [
-                                GourneyColors.coral.opacity(0.2),
-                                GourneyColors.coral.opacity(0.1)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                        
+                    LinearGradient(
+                        colors: [
+                            GourneyColors.coral.opacity(0.2),
+                            GourneyColors.coral.opacity(0.1)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    
+                    VStack(spacing: 8) {
                         Image(systemName: "flame.fill")
                             .font(.system(size: 32))
                             .foregroundColor(GourneyColors.coral.opacity(0.5))
                     }
-                    
-                    // Gradient overlay
-                    VStack {
-                        Spacer()
-                        LinearGradient(
-                            colors: [.clear, .black.opacity(0.7)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                        .frame(height: geometry.size.height * 0.5)
-                    }
-                    
-                    // Content overlay
-                    VStack(alignment: .leading, spacing: 4) {
-                        // Owner at top
-                        if let handle = item.ownerHandle {
-                            HStack(spacing: 6) {
-                                AvatarView(url: item.ownerAvatarUrl, size: 24)
-                                Text("@\(handle)")
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundColor(.white)
-                                    .lineLimit(1)
-                            }
-                            .padding(6)
-                            .background(Color.black.opacity(0.4))
-                            .clipShape(Capsule())
-                        }
-                        
-                        Spacer()
-                        
-                        // Title
-                        Text(item.title)
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(.white)
-                            .lineLimit(2)
-                            .multilineTextAlignment(.leading)
-                        
-                        // ✅ Bottom row: place count (left) and like count (right)
-                        HStack {
-                            // Place count with icon
-                            HStack(spacing: 3) {
-                                Image(systemName: "mappin.circle.fill")
-                                    .font(.system(size: 10))
-                                Text("\(item.itemCount)")
-                                    .font(.system(size: 11, weight: .medium))
-                            }
-                            .foregroundColor(.white.opacity(0.9))
-                            
-                            Spacer()
-                            
-                            // ✅ Like count (bottom right) - no background
-                            HStack(spacing: 3) {
-                                Image(systemName: "heart.fill")
-                                    .font(.system(size: 10))
-                                Text("\(item.likesCount)")
-                                    .font(.system(size: 11, weight: .medium))
-                            }
-                            .foregroundColor(.white.opacity(0.9))
-                        }
-                    }
-                    .padding(8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(
-                        LinearGradient(
-                            colors: [.clear, .black.opacity(0.7)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
                 }
-                .aspectRatio(1, contentMode: .fit)  // ✅ Square aspect ratio
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .contentShape(RoundedRectangle(cornerRadius: 12))  // ✅ Fix tap area
+                
+                // Title overlay (bottom) with item count and like count
+                VStack(alignment: .leading, spacing: 4) {
+                    Spacer()
+                    
+                    Text(item.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.white)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                    
+                    // ✅ Bottom row: place count (left) and like count (right)
+                    HStack {
+                        // Place count with icon
+                        HStack(spacing: 3) {
+                            Image(systemName: "mappin.circle.fill")
+                                .font(.system(size: 10))
+                            Text("\(item.itemCount)")
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                        .foregroundColor(.white.opacity(0.9))
+                        
+                        Spacer()
+                        
+                        // ✅ Like count (bottom right) - no background
+                        HStack(spacing: 3) {
+                            Image(systemName: "heart.fill")
+                                .font(.system(size: 10))
+                            Text("\(item.likesCount)")
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                        .foregroundColor(.white.opacity(0.9))
+                    }
+                }
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    LinearGradient(
+                        colors: [.clear, .black.opacity(0.7)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
             }
+            .aspectRatio(1, contentMode: .fit)  // ✅ Square aspect ratio
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .contentShape(RoundedRectangle(cornerRadius: 12))  // ✅ Fix tap area
         }
         .buttonStyle(PlainButtonStyle())
     }

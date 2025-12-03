@@ -2,6 +2,7 @@
 // Main tab bar with Gourney design system
 // Tab order: Feed, Discover, Add, Rank, Profile (5 tabs)
 // ✅ FIX: Observes NavigationCoordinator to switch to Profile tab when own avatar is tapped
+// ✅ FIX: Tapping currently selected tab pops to root
 
 import SwiftUI
 import Combine
@@ -31,15 +32,29 @@ struct MainTabView: View {
     @State private var selectedTab = 0
     @StateObject private var avatarPreviewState = AvatarPreviewState.shared
     
-    // ✅ NEW: Observe NavigationCoordinator for tab switching
+    // ✅ Observe NavigationCoordinator for tab switching
     @ObservedObject private var navigator = NavigationCoordinator.shared
     
     // Gourney coral color
     private let coralColor = Color(red: 1.0, green: 0.4, blue: 0.4)
     
+    // ✅ Custom binding to detect same-tab tap
+    private var tabSelection: Binding<Int> {
+        Binding(
+            get: { selectedTab },
+            set: { newValue in
+                if newValue == selectedTab {
+                    // Same tab tapped - trigger pop to root
+                    navigator.triggerPopToRoot(tab: newValue)
+                }
+                selectedTab = newValue
+            }
+        )
+    }
+    
     var body: some View {
         ZStack {
-            TabView(selection: $selectedTab) {
+            TabView(selection: tabSelection) {
                 // Tab 1: Feed (Home)
                 FeedView()
                     .tabItem {
@@ -100,7 +115,7 @@ struct MainTabView: View {
         .onAppear {
             configureTabBarAppearance()
         }
-        // ✅ NEW: Listen for tab switch requests from NavigationCoordinator
+        // ✅ Listen for tab switch requests from NavigationCoordinator
         .onReceive(navigator.$shouldSwitchToProfileTab) { shouldSwitch in
             if shouldSwitch {
                 withAnimation(.easeInOut(duration: 0.2)) {

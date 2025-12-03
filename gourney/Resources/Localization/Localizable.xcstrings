@@ -28,6 +28,9 @@
     "#%lld" : {
 
     },
+    "%@" : {
+
+    },
     "%lld" : {
 
     },
@@ -1628,6 +1631,9 @@
     "Follow" : {
 
     },
+    "Followers" : {
+
+    },
     "Following" : {
 
     },
@@ -2241,6 +2247,12 @@
     "New List" : {
 
     },
+    "No %@ found" : {
+
+    },
+    "No followers yet" : {
+
+    },
     "No lists from people you follow" : {
 
     },
@@ -2268,6 +2280,9 @@
     "No results found" : {
 
     },
+    "No users found" : {
+
+    },
     "No visit photos yet" : {
 
     },
@@ -2275,6 +2290,9 @@
 
     },
     "No visits yet" : {
+
+    },
+    "Not following anyone yet" : {
 
     },
     "Not ranked yet" : {
@@ -2887,6 +2905,9 @@
     "Rating" : {
 
     },
+    "Recent" : {
+
+    },
     "Required" : {
 
     },
@@ -2905,16 +2926,19 @@
     "Save to List" : {
 
     },
+    "Search" : {
+
+    },
     "Search for a place" : {
 
     },
     "Search for places" : {
 
     },
-    "Search Places" : {
+    "Search for users or places" : {
 
     },
-    "Search places, users..." : {
+    "Search Places" : {
 
     },
     "Search places..." : {
@@ -3100,6 +3124,9 @@
 
     },
     "Try a different search" : {
+
+    },
+    "Try a different search term" : {
 
     },
     "Try Again" : {

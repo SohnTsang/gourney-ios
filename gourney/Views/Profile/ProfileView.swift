@@ -1,10 +1,7 @@
 // Views/Profile/ProfileView.swift
 // User profile with visits grid and mini-map
 // Production-ready with memory optimization
-// FIX: Changed onDisappear to cleanup() instead of reset() for seamless updates
-// FIX: Removed VisitRefreshTrigger - now using NotificationCenter
-// FIX: Top bar title always centered using ZStack overlay
-// FIX: Uses standard NavigationStack dismiss (like ListDetailView)
+// ✅ NEW: Added navigation to Followers/Following list views
 
 import SwiftUI
 import MapKit
@@ -68,13 +65,39 @@ struct ProfileView: View {
                 FeedDetailView(feedItem: feedItem, feedViewModel: FeedViewModel())
             }
             .navigationDestination(for: String.self) { destination in
+                // Handle both navigation strings and user IDs
                 switch destination {
                 case "editProfile":
                     EditProfileView()
                 case "settings":
                     SettingsView()
                 default:
-                    EmptyView()
+                    // Assume it's a userId for profile navigation
+                    ProfileView(userId: destination)
+                }
+            }
+            // ✅ NEW: Navigation to Followers list
+            .navigationDestination(isPresented: $showFollowers) {
+                if let profile = viewModel.profile {
+                    FollowersFollowingListView(
+                        userId: profile.id,
+                        userHandle: profile.handle,
+                        initialTab: .followers,
+                        followerCount: profile.followerCount,
+                        followingCount: profile.followingCount
+                    )
+                }
+            }
+            // ✅ NEW: Navigation to Following list
+            .navigationDestination(isPresented: $showFollowing) {
+                if let profile = viewModel.profile {
+                    FollowersFollowingListView(
+                        userId: profile.id,
+                        userHandle: profile.handle,
+                        initialTab: .following,
+                        followerCount: profile.followerCount,
+                        followingCount: profile.followingCount
+                    )
                 }
             }
             .navigationDestination(isPresented: $showListsView) {
@@ -284,16 +307,27 @@ struct ProfileView: View {
             .frame(maxWidth: .infinity)
             
             // Right Column: Following (upper), Followers (lower)
+            // MARK: - Feature Flag: View Others' Follow Lists
+            // Set to `true` to allow viewing any user's followers/following
+            // Set to `false` (or use `isOwnProfile`) to only allow viewing your own
+            let canViewFollowLists = isOwnProfile // ← Change to `true` to enable for all profiles
+            
             VStack(spacing: 12) {
-                Button { showFollowing = true } label: {
+                if canViewFollowLists {
+                    Button { showFollowing = true } label: {
+                        statItem(value: profile.followingCount, label: "Following")
+                    }
+                    .buttonStyle(.plain)
+                    
+                    Button { showFollowers = true } label: {
+                        statItem(value: profile.followerCount, label: "Followers")
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    // Non-tappable stats for other users' profiles
                     statItem(value: profile.followingCount, label: "Following")
-                }
-                .buttonStyle(.plain)
-                
-                Button { showFollowers = true } label: {
                     statItem(value: profile.followerCount, label: "Followers")
                 }
-                .buttonStyle(.plain)
             }
             .frame(maxWidth: .infinity)
         }

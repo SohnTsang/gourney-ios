@@ -2,6 +2,7 @@
 // "For You" feed with Gourney branding, search, and infinite scroll
 // NavigationStack with push to FeedDetailView on comment tap
 // Profile navigation via NavigationCoordinator (standard NavigationStack push like ListsView)
+// ✅ Search overlay with Instagram-style fade transition
 
 import SwiftUI
 
@@ -38,6 +39,23 @@ struct FeedView: View {
     }
     
     var body: some View {
+        ZStack {
+            // Main Feed Content
+            mainContent
+            
+            // Search Overlay with fade transition
+            if showSearch {
+                FeedSearchOverlay(isPresented: $showSearch)
+                    .transition(.opacity.animation(.easeInOut(duration: 0.2)))
+                    .zIndex(1)
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: showSearch)
+    }
+    
+    // MARK: - Main Content
+    
+    private var mainContent: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 headerView
@@ -67,11 +85,9 @@ struct FeedView: View {
             .navigationDestination(item: $navigateToDetail) { item in
                 FeedDetailView(feedItem: item, feedViewModel: viewModel)
             }
-            // Profile navigation - same pattern as ListsView uses for ListDetailView
             .navigationDestination(item: $navigator.navigateToProfileUserId) { userId in
                 ProfileView(userId: userId)
             }
-            // Edit visit navigation
             .navigationDestination(item: $itemToEdit) { item in
                 EditVisitView(feedItem: item) { updatedItem in
                     viewModel.updateItem(updatedItem)
@@ -80,6 +96,14 @@ struct FeedView: View {
         }
         .onAppear {
             viewModel.loadFeed()
+        }
+        // ✅ Pop to root when same tab is tapped
+        .onReceive(navigator.$popToRootTab) { tabIndex in
+            if tabIndex == 0 {
+                navigateToDetail = nil
+                itemToEdit = nil
+                showSearch = false
+            }
         }
         .sheet(isPresented: showMenuSheet) {
             if let item = menuItem {
@@ -112,7 +136,7 @@ struct FeedView: View {
             PlaceDetailSheet(
                 placeId: item.place.id,
                 displayName: item.place.displayName,
-                lat: 0, // Will be fetched by PlaceDetailSheet
+                lat: 0,
                 lng: 0,
                 formattedAddress: nil,
                 phoneNumber: nil,
@@ -121,7 +145,6 @@ struct FeedView: View {
                 googlePlaceId: nil,
                 primaryButtonTitle: "Add Visit",
                 primaryButtonAction: {
-                    // Store the item for AddVisit, then dismiss sheet
                     placeForAddVisit = item
                     selectedPlaceItem = nil
                 },
@@ -133,7 +156,6 @@ struct FeedView: View {
             .presentationDragIndicator(.hidden)
         }
         .onChange(of: selectedPlaceItem) { oldValue, newValue in
-            // When sheet dismisses and we have a place queued for AddVisit
             if newValue == nil && placeForAddVisit != nil {
                 showAddVisitFromPlace = true
             }
@@ -167,7 +189,6 @@ struct FeedView: View {
             }
         }
         .onChange(of: showAddVisitFromPlace) { _, newValue in
-            // Clear stored place when AddVisit is dismissed
             if !newValue {
                 placeForAddVisit = nil
             }
@@ -203,16 +224,11 @@ struct FeedView: View {
                 
                 print("✅ [Visit] Deleted successfully")
                 
-                // Broadcast delete notification to all listening views
                 VisitUpdateService.shared.notifyVisitDeleted(visitId: item.id)
-                
-                // Remove from feed
                 viewModel.removeVisit(id: item.id)
                 
-                // Success haptic
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
                 
-                // Clear state
                 itemToDelete = nil
                 isDeletingVisit = false
                 
@@ -260,28 +276,11 @@ struct FeedView: View {
     // MARK: - Search Bar Button
     
     private var searchBarButton: some View {
-        Button {
+        SearchBarButton(placeholder: "Search places, users...") {
             showSearch = true
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 16))
-                    .foregroundColor(.secondary)
-                
-                Text("Search places, users...")
-                    .font(.system(size: 15))
-                    .foregroundColor(.secondary)
-                
-                Spacer()
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(Color(.systemGray6))
-            .cornerRadius(10)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
         .background(colorScheme == .dark ? Color.black : Color.white)
     }
     
@@ -338,7 +337,9 @@ struct FeedView: View {
             title: "Welcome to Gourney!",
             message: "Follow friends to see their restaurant visits, or discover new places from the community.",
             actionTitle: "Find Friends"
-        ) { }
+        ) {
+            showSearch = true
+        }
     }
     
     // MARK: - Share
