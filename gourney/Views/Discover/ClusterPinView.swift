@@ -2,6 +2,7 @@
 //  ClusterPinView.swift
 //  gourney
 //
+//  ✅ FIXED: Grey color for non-visited clusters (was orange)
 //  Cluster pin view matching current design with count number
 //
 
@@ -12,19 +13,21 @@ struct ClusterPinView: View {
     let isVisited: Bool
     let onTap: () -> Void
     
-    // ✅ PERFORMANCE: Cache gradient computation
+    // ✅ FIXED: Use grey for non-visited, red for visited
     private var pinGradient: LinearGradient {
-        isVisited ? visitedGradient : unvisitedGradient
+        isVisited ? visitedGradient : nonVisitedGradient
     }
     
+    // ✅ Red/Coral for visited places
     private let visitedGradient = LinearGradient(
         colors: [Color(red: 1.0, green: 0.4, blue: 0.4), Color(red: 0.95, green: 0.3, blue: 0.35)],
         startPoint: .topLeading,
         endPoint: .bottomTrailing
     )
     
-    private let unvisitedGradient = LinearGradient(
-        colors: [Color(red: 1.0, green: 0.5, blue: 0.3), Color(red: 1.0, green: 0.4, blue: 0.2)],
+    // ✅ GREY for non-visited places (was orange)
+    private let nonVisitedGradient = LinearGradient(
+        colors: [Color(.systemGray3), Color(.systemGray4)],
         startPoint: .topLeading,
         endPoint: .bottomTrailing
     )
@@ -32,7 +35,7 @@ struct ClusterPinView: View {
     var body: some View {
         Button(action: onTap) {
             ZStack {
-                // ✅ WHITE BORDER (outer circle)
+                // WHITE BORDER (outer circle)
                 Circle()
                     .fill(Color.white)
                     .frame(width: clusterSize + 4, height: clusterSize + 4)
@@ -91,10 +94,23 @@ struct ClusterPinView: View {
 
 #Preview {
     VStack(spacing: 20) {
-        ClusterPinView(count: 3, isVisited: true, onTap: {})
-        ClusterPinView(count: 8, isVisited: true, onTap: {})
-        ClusterPinView(count: 15, isVisited: false, onTap: {})
-        ClusterPinView(count: 45, isVisited: true, onTap: {})
+        // Visited clusters (Red)
+        Text("Visited (Red)")
+            .font(.headline)
+        HStack(spacing: 20) {
+            ClusterPinView(count: 3, isVisited: true, onTap: {})
+            ClusterPinView(count: 8, isVisited: true, onTap: {})
+            ClusterPinView(count: 15, isVisited: true, onTap: {})
+        }
+        
+        // Non-visited clusters (Grey)
+        Text("Non-Visited (Grey)")
+            .font(.headline)
+        HStack(spacing: 20) {
+            ClusterPinView(count: 3, isVisited: false, onTap: {})
+            ClusterPinView(count: 8, isVisited: false, onTap: {})
+            ClusterPinView(count: 15, isVisited: false, onTap: {})
+        }
     }
     .padding()
 }

@@ -82,10 +82,10 @@
     "%lld%%" : {
 
     },
-    "0" : {
+    "+" : {
 
     },
-    "Add" : {
+    "0" : {
 
     },
     "Add a comment..." : {
@@ -106,7 +106,7 @@
     "Add Visit" : {
 
     },
-    "All" : {
+    "Address" : {
 
     },
     "Already have an account?" : {
@@ -874,6 +874,9 @@
     "Be the first to earn points\nin this area!" : {
 
     },
+    "Be the first to share your experience!" : {
+
+    },
     "Be the first to visit!" : {
 
     },
@@ -1219,9 +1222,6 @@
 
     },
     "Discard Changes?" : {
-
-    },
-    "Discover" : {
 
     },
     "Discover, follow & share the Deli" : {
@@ -1616,14 +1616,275 @@
     "Failed to load" : {
 
     },
-    "Feed" : {
-
-    },
     "Filter Lists" : {
 
     },
     "Filter options coming soon" : {
 
+    },
+    "filter.apply" : {
+      "comment" : "Apply filters button",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apply Filters"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "フィルターを適用"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "套用篩選"
+          }
+        }
+      }
+    },
+    "filter.place_type.all" : {
+      "comment" : "All places filter option",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "All"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "すべて"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全部"
+          }
+        }
+      }
+    },
+    "filter.place_type.new" : {
+      "comment" : "New places filter option",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新規"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未去過"
+          }
+        }
+      }
+    },
+    "filter.place_type.title" : {
+      "comment" : "Place type section title",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Place Type"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "場所タイプ"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "地點類型"
+          }
+        }
+      }
+    },
+    "filter.place_type.visited" : {
+      "comment" : "Visited places filter option",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Visited"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "訪問済み"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已去過"
+          }
+        }
+      }
+    },
+    "filter.rating.3up" : {
+      "comment" : "3+ star rating filter",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "3+"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "3+"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "3+"
+          }
+        }
+      }
+    },
+    "filter.rating.4up" : {
+      "comment" : "4+ star rating filter",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "4+"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "4+"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "4+"
+          }
+        }
+      }
+    },
+    "filter.rating.any" : {
+      "comment" : "Any rating filter option",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Any"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "すべて"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不限"
+          }
+        }
+      }
+    },
+    "filter.rating.title" : {
+      "comment" : "Rating section title",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Minimum Rating"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最低評価"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最低評分"
+          }
+        }
+      }
+    },
+    "filter.reset" : {
+      "comment" : "Reset filters button",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reset Filters"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リセット"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重設篩選"
+          }
+        }
+      }
+    },
+    "filter.title" : {
+      "comment" : "Filter popup title",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Filters"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "フィルター"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "篩選"
+          }
+        }
+      }
     },
     "Filters" : {
 
@@ -1631,7 +1892,13 @@
     "Follow" : {
 
     },
+    "followers" : {
+
+    },
     "Followers" : {
+
+    },
+    "following" : {
 
     },
     "Following" : {
@@ -1655,10 +1922,13 @@
     "Leaderboard" : {
 
     },
-    "Less" : {
+    "less" : {
 
     },
     "List name" : {
+
+    },
+    "lists" : {
 
     },
     "Lists with 3+ likes and 3+ places will appear here" : {
@@ -2238,7 +2508,7 @@
     "Map" : {
 
     },
-    "More" : {
+    "more" : {
 
     },
     "Name" : {
@@ -2523,13 +2793,7 @@
     "Posting your visit..." : {
 
     },
-    "Profile" : {
-
-    },
     "pts" : {
-
-    },
-    "Rank" : {
 
     },
     "rank.coming_soon.message" : {
@@ -3153,7 +3417,13 @@
     "username" : {
 
     },
+    "View All" : {
+
+    },
     "Visibility" : {
+
+    },
+    "visits" : {
 
     },
     "Visits" : {

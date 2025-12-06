@@ -1,12 +1,22 @@
 // Views/Profile/ProfileVisitCard.swift
 // Hybrid visit card: photo or text-only with gradient
-// Production-ready with memory optimization (3-col, 4:5 ratio)
-// Navigation handled by parent view
+// ✅ Production-grade with:
+// - CachedAsyncImage for memory-efficient image loading
+// - Equatable for preventing unnecessary redraws
+// - Optimized gradients with drawingGroup()
 
 import SwiftUI
 
-struct ProfileVisitCard: View {
+struct ProfileVisitCard: View, Equatable {
     let visit: ProfileVisit
+    
+    // ✅ Equatable: Only redraw when visit data actually changes
+    static func == (lhs: ProfileVisitCard, rhs: ProfileVisitCard) -> Bool {
+        lhs.visit.id == rhs.visit.id &&
+        lhs.visit.photoUrls == rhs.visit.photoUrls &&
+        lhs.visit.rating == rhs.visit.rating &&
+        lhs.visit.comment == rhs.visit.comment
+    }
     
     var body: some View {
         GeometryReader { geo in
@@ -19,30 +29,33 @@ struct ProfileVisitCard: View {
         .contentShape(Rectangle())
     }
     
-    // MARK: - Photo Card (no comment)
+    // MARK: - Photo Card
     
     private func photoCard(size: CGSize) -> some View {
         ZStack(alignment: .bottomLeading) {
-            // Photo
-            AsyncImage(url: URL(string: visit.photos.first ?? "")) { phase in
-                switch phase {
-                case .success(let image):
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: size.width, height: size.height)
-                        .clipped()
-                case .failure:
-                    placeholderView(size: size)
-                case .empty:
-                    Rectangle()
-                        .fill(Color(.systemGray5))
-                        .shimmer()
-                @unknown default:
-                    placeholderView(size: size)
-                }
+            // ✅ Cached image loading
+            CachedAsyncImage(url: visit.photos.first) { image in
+                image
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: size.width, height: size.height)
+                    .clipped()
+            } placeholder: {
+                Rectangle()
+                    .fill(Color(.systemGray5))
+                    .frame(width: size.width, height: size.height)
+                    .shimmer()
             }
             
+            // ✅ Optimized overlay with drawingGroup
+            photoOverlay
+                .drawingGroup()
+        }
+        .clipShape(Rectangle())
+    }
+    
+    private var photoOverlay: some View {
+        ZStack(alignment: .bottomLeading) {
             // Gradient overlay
             LinearGradient(
                 colors: [.clear, .clear, .black.opacity(0.7)],
@@ -50,14 +63,13 @@ struct ProfileVisitCard: View {
                 endPoint: .bottom
             )
             
-            // Info overlay (place name + rating only)
+            // Info overlay
             photoCardInfo
                 .padding(8)
         }
-        .clipShape(Rectangle())
     }
     
-    // MARK: - Text-Only Card (with comment)
+    // MARK: - Text-Only Card
     
     private func textOnlyCard(size: CGSize) -> some View {
         ZStack(alignment: .bottomLeading) {
@@ -81,24 +93,22 @@ struct ProfileVisitCard: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.top, 16)
             
-            // Info overlay (with comment)
+            // Info overlay
             textCardInfo
                 .padding(8)
         }
         .clipShape(Rectangle())
     }
     
-    // MARK: - Photo Card Info (no comment)
+    // MARK: - Photo Card Info
     
     private var photoCardInfo: some View {
         VStack(alignment: .leading, spacing: 3) {
-            // Place name
             Text(visit.place?.displayName ?? "Unknown")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundColor(.white)
                 .lineLimit(1)
             
-            // Rating
             if let rating = visit.rating, rating > 0 {
                 RatingStarsView(
                     rating: rating,
@@ -111,17 +121,15 @@ struct ProfileVisitCard: View {
         }
     }
     
-    // MARK: - Text Card Info (with comment)
+    // MARK: - Text Card Info
     
     private var textCardInfo: some View {
         VStack(alignment: .leading, spacing: 3) {
-            // Place name
             Text(visit.place?.displayName ?? "Unknown")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundColor(.white)
                 .lineLimit(1)
             
-            // Rating
             if let rating = visit.rating, rating > 0 {
                 RatingStarsView(
                     rating: rating,
@@ -132,7 +140,6 @@ struct ProfileVisitCard: View {
                 )
             }
             
-            // Comment preview (30 chars) - only for text cards
             if let comment = visit.comment, !comment.isEmpty {
                 Text(truncatedComment(comment, maxLength: 30))
                     .font(.system(size: 9))
@@ -140,19 +147,6 @@ struct ProfileVisitCard: View {
                     .lineLimit(2)
             }
         }
-    }
-    
-    // MARK: - Placeholder
-    
-    private func placeholderView(size: CGSize) -> some View {
-        ZStack {
-            Color(.systemGray5)
-            
-            Image(systemName: "photo")
-                .font(.system(size: 20))
-                .foregroundColor(.gray)
-        }
-        .frame(width: size.width, height: size.height)
     }
     
     // MARK: - Helpers

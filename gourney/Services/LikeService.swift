@@ -2,6 +2,10 @@
 // Standalone service for handling visit likes from any view
 // Works independently of FeedViewModel/ProfileViewModel
 // Broadcasts notifications so all views can stay in sync
+// ✅ FIXED: Matches FeedViewModel/FeedDetailView pattern exactly
+// - Cancel debounce task, NOT the API call
+// - Check UI state before syncing
+// - Retry on server mismatch (don't cancel)
 
 import Foundation
 import SwiftUI
@@ -24,12 +28,17 @@ class LikeService: ObservableObject {
     static let shared = LikeService()
     
     private let client = SupabaseClient.shared
-    private var pendingTasks: [String: Task<Void, Never>] = [:]
+    
+    // Track debounce tasks per visit (only the sleep portion, NOT API calls)
+    private var debounceTasks: [String: Task<Void, Never>] = [:]
+    
+    // Track current desired state per visit (what UI currently shows)
+    private var currentStates: [String: Bool] = [:]
     
     private init() {}
     
     /// Toggle like for a visit - call this from any view
-    /// Returns the new like state and count via the callback
+    /// Matches FeedViewModel/FeedDetailView pattern exactly
     func toggleLike(
         visitId: String,
         currentlyLiked: Bool,
@@ -48,57 +57,108 @@ class LikeService: ObservableObject {
         onOptimisticUpdate(newLikedState, newCount)
         print("💫 [LikeService] Optimistic: liked=\(newLikedState), count=\(newCount)")
         
-        // Broadcast optimistic update
-        broadcastLikeChange(visitId: visitId, isLiked: newLikedState, likeCount: newCount)
+        // Store the current desired state
+        currentStates[visitId] = newLikedState
         
         // Haptic feedback
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         
-        // Cancel any pending task for this visit
-        pendingTasks[visitId]?.cancel()
+        // Cancel any pending DEBOUNCE task (NOT the API call)
+        if debounceTasks[visitId] != nil {
+            print("🚫 [LikeService] Cancelling pending debounce for \(visitId)")
+            debounceTasks[visitId]?.cancel()
+        }
         
-        // Debounce API call
-        pendingTasks[visitId] = Task {
+        // Capture the final desired state AFTER the toggle
+        let finalDesiredState = newLikedState
+        
+        print("⏳ [LikeService] Scheduling API call in 300ms, desiredState: \(finalDesiredState)")
+        
+        // Debounce: wait 300ms before making API call
+        debounceTasks[visitId] = Task { [weak self] in
             do {
                 try await Task.sleep(nanoseconds: 300_000_000) // 300ms
+                print("⏰ [LikeService] 300ms passed, calling syncLikeWithServer")
                 
                 guard !Task.isCancelled else {
-                    print("🚫 [LikeService] Task cancelled")
+                    print("🚫 [LikeService] Debounce task was cancelled before sync")
                     return
                 }
                 
-                print("📤 [LikeService] Calling API...")
-                let response = try await syncWithServer(visitId: visitId)
+                // Run sync in a separate non-cancellable context
+                await self?.syncLikeWithServer(
+                    visitId: visitId,
+                    desiredState: finalDesiredState,
+                    onServerResponse: onServerResponse,
+                    onError: onError
+                )
                 
-                guard !Task.isCancelled else { return }
-                
-                print("✅ [LikeService] Server response: liked=\(response.liked), count=\(response.likeCount)")
+            } catch {
+                // Task.sleep throws CancellationError when cancelled
+                print("🚫 [LikeService] Debounce cancelled (this is normal during rapid taps)")
+            }
+            
+            self?.debounceTasks.removeValue(forKey: visitId)
+        }
+    }
+    
+    // MARK: - Sync with Server (matches FeedViewModel pattern exactly)
+    
+    private func syncLikeWithServer(
+        visitId: String,
+        desiredState: Bool,
+        onServerResponse: @escaping (Bool, Int) -> Void,
+        onError: ((Error) -> Void)?
+    ) async {
+        print("🌐 [LikeService] Starting sync for \(visitId), desiredState: \(desiredState)")
+        
+        // Check if UI state still matches what we want to sync
+        guard currentStates[visitId] == desiredState else {
+            print("⚠️ [LikeService] UI state changed (\(currentStates[visitId] ?? false) vs \(desiredState)), skipping sync")
+            return
+        }
+        
+        do {
+            let path = "/functions/v1/likes-toggle?visit_id=\(visitId)"
+            print("📤 [LikeService] Calling API: \(path)")
+            
+            let response: LikeResponse = try await client.post(
+                path: path,
+                body: [:],
+                requiresAuth: true
+            )
+            
+            print("📥 [LikeService] Server returned: liked=\(response.liked), count=\(response.likeCount)")
+            
+            // If server state matches desired state, sync the count
+            if response.liked == desiredState {
+                print("✅ [LikeService] Synced - liked: \(response.liked), count: \(response.likeCount)")
                 onServerResponse(response.liked, response.likeCount)
                 
                 // Broadcast server-confirmed state
                 broadcastLikeChange(visitId: visitId, isLiked: response.liked, likeCount: response.likeCount)
                 
-            } catch is CancellationError {
-                print("🚫 [LikeService] Cancelled")
-            } catch {
-                print("❌ [LikeService] Error: \(error)")
-                onError?(error)
+                // Clear stored state
+                currentStates.removeValue(forKey: visitId)
+            } else {
+                // Server disagrees - retry (matches FeedViewModel pattern)
+                print("⚠️ [LikeService] Server mismatch (got \(response.liked), wanted \(desiredState)), retrying...")
+                await syncLikeWithServer(
+                    visitId: visitId,
+                    desiredState: desiredState,
+                    onServerResponse: onServerResponse,
+                    onError: onError
+                )
+                return
             }
             
-            pendingTasks.removeValue(forKey: visitId)
+        } catch {
+            print("❌ [LikeService] Error: \(error.localizedDescription)")
+            onError?(error)
+            // Don't revert - keep UI state as user intended
+            // Clear stored state
+            currentStates.removeValue(forKey: visitId)
         }
-    }
-    
-    private func syncWithServer(visitId: String) async throws -> LikeResponse {
-        let path = "/functions/v1/likes-toggle?visit_id=\(visitId)"
-        
-        let response: LikeResponse = try await client.post(
-            path: path,
-            body: [:],
-            requiresAuth: true
-        )
-        
-        return response
     }
     
     private func broadcastLikeChange(visitId: String, isLiked: Bool, likeCount: Int) {
@@ -114,13 +174,15 @@ class LikeService: ObservableObject {
     }
     
     func cancelPending(for visitId: String) {
-        pendingTasks[visitId]?.cancel()
-        pendingTasks.removeValue(forKey: visitId)
+        debounceTasks[visitId]?.cancel()
+        debounceTasks.removeValue(forKey: visitId)
+        currentStates.removeValue(forKey: visitId)
     }
     
     func cancelAll() {
-        pendingTasks.values.forEach { $0.cancel() }
-        pendingTasks.removeAll()
+        debounceTasks.values.forEach { $0.cancel() }
+        debounceTasks.removeAll()
+        currentStates.removeAll()
     }
 }
 

@@ -2,6 +2,7 @@
 // User profile with visits grid and mini-map
 // Production-ready with memory optimization
 // ✅ NEW: Added navigation to Followers/Following list views
+// ✅ FIX: Proper bottom safe area padding for tab bar
 
 import SwiftUI
 import MapKit
@@ -136,8 +137,8 @@ struct ProfileView: View {
             // Visit updates are handled via NotificationCenter
             viewModel.cleanup()
         }
-        .onReceive(NavigationCoordinator.shared.$shouldPopProfileToRoot) { shouldPop in
-            if shouldPop && isOwnProfile {
+        .onReceive(NavigationCoordinator.shared.$popToRootTab) { tabIndex in
+            if tabIndex == 4 && isOwnProfile {
                 navigationPath = NavigationPath()
             }
         }
@@ -230,14 +231,37 @@ struct ProfileView: View {
                 tabPicker
                     .padding(.top, 20)
                 
-                // Tab Content (reduced gap, no bottom padding)
+                // Tab Content (reduced gap)
                 tabContent
+                
+                // ✅ Pagination trigger - only for visits tab
+                if selectedTab == 0 && viewModel.hasMoreVisits && !viewModel.isLoadingVisits && !viewModel.visits.isEmpty {
+                    paginationTrigger
+                }
             }
-            // No bottom padding - grid goes right to tab bar
         }
         .refreshable {
             await viewModel.refresh()
         }
+        .scrollIndicators(.hidden)
+    }
+    
+    // MARK: - Pagination Trigger (Instagram-style)
+    // Uses GeometryReader onChange - only fires when scroll position CHANGES (not on initial load)
+    
+    private var paginationTrigger: some View {
+        GeometryReader { geo in
+            Color.clear
+                .onChange(of: geo.frame(in: .global).minY) { _, minY in
+                    // Check if this trigger view is visible on screen
+                    let screenHeight = UIScreen.main.bounds.height
+                    if minY < screenHeight && minY > 0 {
+                        print("📜 [Profile] 🔥 Bottom trigger visible (y: \(Int(minY))) - loading more visits")
+                        viewModel.loadMoreVisits()
+                    }
+                }
+        }
+        .frame(height: 50)
     }
     
     // MARK: - Header Section (3-Column Layout)
@@ -248,58 +272,79 @@ struct ProfileView: View {
     private func headerSection(_ profile: UserProfile) -> some View {
         HStack(spacing: 0) {
             // Left Column: Pts (upper), Lists + Visits (lower)
-            VStack(spacing: 12) {
-                // Pts - same font size as following/followers
+            VStack(spacing: 16) {
+                // Points
                 VStack(spacing: 2) {
-                    Text(formatNumber(viewModel.displayPoints))
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundColor(GourneyColors.coral)
+                    Text("\(profile.points)")
+                        .font(.system(size: 20, weight: .bold))
+                        .foregroundColor(.primary)
                     Text("pts")
-                        .font(.system(size: 11))
+                        .font(.system(size: 12))
                         .foregroundColor(.secondary)
                 }
                 
-                // Lists + Visits row - same font size as following/followers
-                HStack(spacing: 16) {
-                    Button { showListsView = true } label: {
-                        statItem(value: profile.listCount, label: "Lists")
+                // Lists + Visits Row
+                HStack(spacing: 20) {
+                    // Lists (tappable)
+                    Button {
+                        showListsView = true
+                    } label: {
+                        VStack(spacing: 2) {
+                            Text("\(profile.listCount)")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.primary)
+                            Text("lists")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                        }
                     }
                     .buttonStyle(.plain)
                     
-                    statItem(value: profile.visitCount, label: "Visits")
+                    // Visits (non-tappable for now)
+                    VStack(spacing: 2) {
+                        Text("\(profile.visitCount)")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(.primary)
+                        Text("visits")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
             .frame(maxWidth: .infinity)
             
             // Center Column: Avatar + Name + Handle
             VStack(spacing: 8) {
-                // Avatar (larger, no border) - tappable for preview on own profile
-                if isOwnProfile {
-                    Button {
-                        // Show avatar preview
-                        if let avatarUrl = profile.avatarUrl {
-                            AvatarPreviewState.shared.show(
-                                image: nil,
-                                imageUrl: avatarUrl,
-                                sourceFrame: avatarFrame
-                            )
-                        }
-                    } label: {
-                        AvatarView(url: profile.avatarUrl, size: 80)
-                            .background(
-                                GeometryReader { geo in
-                                    Color.clear.onAppear {
-                                        avatarFrame = geo.frame(in: .global)
-                                    }
-                                }
-                            )
+                // Avatar with tap gesture
+                AvatarView(
+                    url: profile.avatarUrl,
+                    size: 80
+                )
+                .onTapGesture {
+                    if let urlString = profile.avatarUrl, !urlString.isEmpty {
+                        // Get the avatar frame for animation
+                        AvatarPreviewState.shared.show(
+                            image: nil,
+                            imageUrl: urlString,
+                            sourceFrame: avatarFrame
+                        )
                     }
-                    .buttonStyle(.plain)
-                } else {
-                    AvatarView(url: profile.avatarUrl, size: 80)
                 }
+                .background(
+                    GeometryReader { geo in
+                        Color.clear.onAppear {
+                            avatarFrame = geo.frame(in: .global)
+                        }
+                    }
+                )
                 
-                // Handle (below avatar)
+                // Name
+                Text(profile.displayName)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
+                
+                // Handle
                 Text("@\(profile.handle)")
                     .font(.system(size: 13))
                     .foregroundColor(.secondary)
@@ -307,46 +352,42 @@ struct ProfileView: View {
             .frame(maxWidth: .infinity)
             
             // Right Column: Following (upper), Followers (lower)
-            // MARK: - Feature Flag: View Others' Follow Lists
-            // Set to `true` to allow viewing any user's followers/following
-            // Set to `false` (or use `isOwnProfile`) to only allow viewing your own
-            let canViewFollowLists = isOwnProfile // ← Change to `true` to enable for all profiles
-            
-            VStack(spacing: 12) {
-                if canViewFollowLists {
-                    Button { showFollowing = true } label: {
-                        statItem(value: profile.followingCount, label: "Following")
+            VStack(spacing: 16) {
+                // Following (tappable)
+                Button {
+                    showFollowing = true
+                } label: {
+                    VStack(spacing: 2) {
+                        Text(formatNumber(profile.followingCount))
+                            .font(.system(size: 20, weight: .bold))
+                            .foregroundColor(.primary)
+                        Text("following")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
                     }
-                    .buttonStyle(.plain)
-                    
-                    Button { showFollowers = true } label: {
-                        statItem(value: profile.followerCount, label: "Followers")
-                    }
-                    .buttonStyle(.plain)
-                } else {
-                    // Non-tappable stats for other users' profiles
-                    statItem(value: profile.followingCount, label: "Following")
-                    statItem(value: profile.followerCount, label: "Followers")
                 }
+                .buttonStyle(.plain)
+                
+                // Followers (tappable)
+                Button {
+                    showFollowers = true
+                } label: {
+                    VStack(spacing: 2) {
+                        Text(formatNumber(profile.followerCount))
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(.primary)
+                        Text("followers")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
             }
             .frame(maxWidth: .infinity)
         }
     }
     
-    // MARK: - Stat Item
-    
-    private func statItem(value: Int, label: String) -> some View {
-        VStack(spacing: 2) {
-            Text(formatNumber(value))
-                .font(.system(size: 18, weight: .bold))
-                .foregroundColor(.primary)
-            Text(label)
-                .font(.system(size: 11))
-                .foregroundColor(.secondary)
-        }
-    }
-    
-    // MARK: - Bio Section (Centered, truncated to 3 lines)
+    // MARK: - Bio Section (Centered, Expandable)
     
     private func bioSection(_ bio: String) -> some View {
         VStack(spacing: 4) {
@@ -354,35 +395,35 @@ struct ProfileView: View {
                 .font(.system(size: 14))
                 .foregroundColor(.primary)
                 .multilineTextAlignment(.center)
-                .lineLimit(viewModel.isBioExpanded ? nil : 3)
+                .lineLimit(viewModel.isBioExpanded ? nil : 2)
+                .animation(.easeInOut(duration: 0.2), value: viewModel.isBioExpanded)
             
-            if bio.count > 100 {
+            // Show "more" button if bio is truncated
+            if bio.count > 80 {
                 Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        viewModel.isBioExpanded.toggle()
-                    }
+                    viewModel.isBioExpanded.toggle()
                 } label: {
-                    Text(viewModel.isBioExpanded ? "Less" : "More")
+                    Text(viewModel.isBioExpanded ? "less" : "more")
                         .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(GourneyColors.coral)
+                        .foregroundColor(.secondary)
                 }
             }
         }
         .frame(maxWidth: .infinity)
     }
     
-    // MARK: - Action Button (Theme color for Edit Profile)
+    // MARK: - Action Button (Edit Profile or Follow)
     
     private func actionButton(_ profile: UserProfile) -> some View {
-        Group {
-            if viewModel.isOwnProfile {
+        HStack(spacing: 12) {
+            if isOwnProfile {
                 Button {
                     navigationPath.append("editProfile")
                 } label: {
                     Text("Edit Profile")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.system(size: 14, weight: .semibold))
                         .foregroundColor(.white)
-                        .padding(.horizontal, 20)
+                        .padding(.horizontal, 24)
                         .padding(.vertical, 8)
                         .background(GourneyColors.coral)
                         .cornerRadius(6)
@@ -475,26 +516,28 @@ struct ProfileView: View {
         .padding(.top, 8)
     }
     
-    // MARK: - Visits Grid (3 columns, 4:5 ratio)
+    // MARK: - Visits Grid (3 columns, 4:5 ratio) - Instagram Style
     
+    @ViewBuilder
     private var visitsGrid: some View {
-        ZStack {
-            if viewModel.isLoadingVisits && viewModel.visits.isEmpty {
-                // Loading overlay - shared component
-                CenteredLoadingView()
-                    .frame(height: 300)
-            } else if viewModel.visits.isEmpty {
-                // Empty state
-                VStack(spacing: 12) {
-                    Image(systemName: "fork.knife.circle")
-                        .font(.system(size: 40))
-                        .foregroundColor(GourneyColors.coral.opacity(0.5))
-                    Text("No visits yet")
-                        .font(.system(size: 15))
-                        .foregroundColor(.secondary)
-                }
-                .frame(height: 200)
-            } else {
+        if viewModel.isLoadingVisits && viewModel.visits.isEmpty {
+            // Initial loading state
+            CenteredLoadingView()
+                .frame(height: 300)
+        } else if viewModel.visits.isEmpty {
+            // Empty state
+            VStack(spacing: 12) {
+                Image(systemName: "fork.knife.circle")
+                    .font(.system(size: 40))
+                    .foregroundColor(GourneyColors.coral.opacity(0.5))
+                Text("No visits yet")
+                    .font(.system(size: 15))
+                    .foregroundColor(.secondary)
+            }
+            .frame(height: 200)
+        } else {
+            VStack(spacing: 0) {
+                // Grid content
                 LazyVGrid(
                     columns: [
                         GridItem(.flexible(), spacing: 2),
@@ -503,34 +546,30 @@ struct ProfileView: View {
                     ],
                     spacing: 2
                 ) {
-                    ForEach(Array(viewModel.visits.enumerated()), id: \.element.id) { index, visit in
+                    // Existing visits
+                    ForEach(viewModel.visits) { visit in
                         ProfileVisitCard(visit: visit)
                             .aspectRatio(4/5, contentMode: .fill)
                             .onTapGesture {
-                                // Convert to FeedItem and navigate
                                 if let profile = viewModel.profile {
                                     let feedItem = visit.toFeedItem(user: profile)
                                     navigationPath.append(feedItem)
                                 }
                             }
-                            .onAppear {
-                                // ✅ Trigger pagination when near the end
-                                if index >= viewModel.visits.count - 3 {
-                                    print("📜 [Profile] Near end, triggering pagination at index \(index)")
-                                    viewModel.loadMoreVisitsIfNeeded(currentVisit: visit)
-                                }
-                            }
-                    }
-                    
-                    // Pagination loading - shared skeleton cells
-                    if viewModel.isLoadingVisits && !viewModel.visits.isEmpty {
-                        ForEach(0..<3, id: \.self) { _ in
-                            GridSkeletonCell(aspectRatio: 4/5)
-                        }
                     }
                 }
                 .padding(.horizontal, 2)
-                .padding(.bottom, 100) // Space for tab bar
+                
+                // ✅ FeedView-style: Centered loading spinner during pagination
+                if viewModel.isLoadingVisits {
+                    HStack {
+                        Spacer()
+                        ProgressView()
+                            .tint(GourneyColors.coral)
+                        Spacer()
+                    }
+                    .padding(.vertical, 20)
+                }
             }
         }
     }
@@ -542,6 +581,7 @@ struct ProfileView: View {
             .frame(height: 400)
             .cornerRadius(12)
             .padding(.horizontal, 16)
+            // No bottom padding needed - ScrollView contentMargins handles tab bar
     }
     
     // MARK: - Loading View

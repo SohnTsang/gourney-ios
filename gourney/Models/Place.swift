@@ -97,9 +97,6 @@ extension Place: Codable {
         print("   avgRating decoded: \(avgRating?.description ?? "nil")")
         print("   visitCount decoded: \(visitCount?.description ?? "nil")")
         print("   formattedAddress decoded: \(formattedAddress ?? "nil")")
-
-        
-        
     }
     
     enum CodingKeys: String, CodingKey {
@@ -140,6 +137,9 @@ enum PlaceSource: String, Codable {
     case google, apple, database
 }
 
+// MARK: - PlaceSearchResult
+// ✅ UPDATED: Added visitCount and avgRating for filter support
+
 struct PlaceSearchResult: Codable, Identifiable, Equatable {
     var id: UUID
     let source: PlaceSource
@@ -156,6 +156,10 @@ struct PlaceSearchResult: Codable, Identifiable, Equatable {
     let existsInDb: Bool
     let dbPlaceId: String?
     let appleFullData: ApplePlaceData?
+    
+    // ✅ NEW: For filtering support
+    let visitCount: Int?
+    let avgRating: Double?
     
     var coordinate: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: lat, longitude: lng)
@@ -175,6 +179,7 @@ struct PlaceSearchResult: Codable, Identifiable, Equatable {
         lhs.id == rhs.id
     }
     
+    // ✅ Full initializer with new fields
     init(
         source: PlaceSource,
         googlePlaceId: String?,
@@ -189,7 +194,9 @@ struct PlaceSearchResult: Codable, Identifiable, Equatable {
         photoUrls: [String]?,
         existsInDb: Bool,
         dbPlaceId: String?,
-        appleFullData: ApplePlaceData?
+        appleFullData: ApplePlaceData?,
+        visitCount: Int? = nil,
+        avgRating: Double? = nil
     ) {
         self.id = UUID()
         self.source = source
@@ -206,12 +213,15 @@ struct PlaceSearchResult: Codable, Identifiable, Equatable {
         self.existsInDb = existsInDb
         self.dbPlaceId = dbPlaceId
         self.appleFullData = appleFullData
+        self.visitCount = visitCount
+        self.avgRating = avgRating
     }
     
     enum CodingKeys: String, CodingKey {
         case source, googlePlaceId, applePlaceId, nameEn, nameJa, nameZh
         case lat, lng, formattedAddress, categories, photoUrls
         case existsInDb, dbPlaceId, appleFullData
+        case visitCount, avgRating  // ✅ NEW
     }
     
     init(from decoder: Decoder) throws {
@@ -231,6 +241,10 @@ struct PlaceSearchResult: Codable, Identifiable, Equatable {
         self.existsInDb = try container.decode(Bool.self, forKey: .existsInDb)
         self.dbPlaceId = try? container.decodeIfPresent(String.self, forKey: .dbPlaceId)
         self.appleFullData = try? container.decodeIfPresent(ApplePlaceData.self, forKey: .appleFullData)
+        
+        // ✅ NEW: Decode filter fields
+        self.visitCount = try? container.decodeIfPresent(Int.self, forKey: .visitCount)
+        self.avgRating = try? container.decodeIfPresent(Double.self, forKey: .avgRating)
     }
     
     func encode(to encoder: Encoder) throws {
@@ -249,6 +263,10 @@ struct PlaceSearchResult: Codable, Identifiable, Equatable {
         try container.encode(existsInDb, forKey: .existsInDb)
         try container.encodeIfPresent(dbPlaceId, forKey: .dbPlaceId)
         try container.encodeIfPresent(appleFullData, forKey: .appleFullData)
+        
+        // ✅ NEW: Encode filter fields
+        try container.encodeIfPresent(visitCount, forKey: .visitCount)
+        try container.encodeIfPresent(avgRating, forKey: .avgRating)
     }
 }
 

@@ -5,12 +5,13 @@
 // FIX: Added notification listener for seamless visit updates
 // FIX: Comment input now shows current user's avatar
 // Avatar taps now navigate via NavigationCoordinator
+// ✅ UPDATE: feedViewModel is now optional to support navigation from PlaceVisitsListView
 
 import SwiftUI
 
 struct FeedDetailView: View {
     let feedItem: FeedItem
-    @ObservedObject var feedViewModel: FeedViewModel
+    var feedViewModel: FeedViewModel?  // ✅ Made optional
     
     @StateObject private var viewModel: FeedDetailViewModel
     @State private var displayItem: FeedItem  // Mutable copy for UI updates
@@ -34,7 +35,6 @@ struct FeedDetailView: View {
     // Local like state (since ProfileVisit doesn't track likes)
     @State private var localIsLiked: Bool = false
     @State private var localLikeCount: Int = 0
-    @State private var pendingLikeTask: Task<Void, Never>?
     
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
@@ -43,7 +43,7 @@ struct FeedDetailView: View {
         displayItem.user.id == AuthManager.shared.currentUser?.id
     }
     
-    init(feedItem: FeedItem, feedViewModel: FeedViewModel) {
+    init(feedItem: FeedItem, feedViewModel: FeedViewModel? = nil) {  // ✅ Default to nil
         self.feedItem = feedItem
         self.feedViewModel = feedViewModel
         self._displayItem = State(initialValue: feedItem)
@@ -122,14 +122,13 @@ struct FeedDetailView: View {
         .onAppear {
             viewModel.loadComments()
             viewModel.onCommentCountChanged = { delta in
-                feedViewModel.updateCommentCount(for: displayItem.id, delta: delta)
+                feedViewModel?.updateCommentCount(for: displayItem.id, delta: delta)  // ✅ Optional chaining
             }
             // Fetch actual like status (ProfileVisit doesn't have this data)
             fetchLikeStatus()
         }
         .onDisappear {
             viewModel.cleanup()
-            pendingLikeTask?.cancel()
         }
         // Listen for visit updates from notification
         .onReceive(NotificationCenter.default.publisher(for: .visitDidUpdate)) { notification in
@@ -140,7 +139,7 @@ struct FeedDetailView: View {
                 // Update local display
                 displayItem = updatedItem
                 // Update in feed list
-                feedViewModel.updateItem(updatedItem)
+                feedViewModel?.updateItem(updatedItem)  // ✅ Optional chaining
                 // Note: ProfileView update now handled via NotificationCenter
             }
         }
@@ -354,8 +353,8 @@ struct FeedDetailView: View {
                 // Broadcast delete notification to all listening views
                 VisitUpdateService.shared.notifyVisitDeleted(visitId: displayItem.id)
                 
-                // Remove from feed
-                feedViewModel.removeVisit(id: displayItem.id)
+                // Remove from feed (if available)
+                feedViewModel?.removeVisit(id: displayItem.id)  // ✅ Optional chaining
                 
                 // Success haptic
                 let generator = UINotificationFeedbackGenerator()
@@ -489,84 +488,29 @@ struct FeedDetailView: View {
         }
     }
     
-    // MARK: - Toggle Like (same pattern as FeedViewModel)
+    // MARK: - Toggle Like (uses LikeService for consistency)
     
     private func toggleLike() {
-        // Optimistic UI update immediately
-        localIsLiked.toggle()
-        localLikeCount += localIsLiked ? 1 : -1
-        localLikeCount = max(0, localLikeCount)
-        
-        print("💫 [FeedDetail] Optimistic: liked=\(localIsLiked), count=\(localLikeCount)")
-        
-        // Haptic feedback
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        
-        // Cancel any pending API call
-        pendingLikeTask?.cancel()
-        
-        // Capture the final desired state
-        let visitId = displayItem.id
-        let finalDesiredState = localIsLiked
-        
-        // Debounce: wait 300ms before making API call
-        pendingLikeTask = Task {
-            try? await Task.sleep(nanoseconds: 300_000_000) // 300ms
-            
-            guard !Task.isCancelled else {
-                print("🚫 [FeedDetail] Like task cancelled")
-                return
+        LikeService.shared.toggleLike(
+            visitId: displayItem.id,
+            currentlyLiked: localIsLiked,
+            currentCount: localLikeCount,
+            onOptimisticUpdate: { [self] newLiked, newCount in
+                localIsLiked = newLiked
+                localLikeCount = newCount
+                print("💫 [FeedDetail] Optimistic: liked=\(newLiked), count=\(newCount)")
+            },
+            onServerResponse: { [self] serverLiked, serverCount in
+                localIsLiked = serverLiked
+                localLikeCount = serverCount
+                // Update FeedViewModel if available
+                feedViewModel?.updateLikeState(visitId: displayItem.id, isLiked: serverLiked, likeCount: serverCount)
+                print("✅ [FeedDetail] Server synced: liked=\(serverLiked), count=\(serverCount)")
+            },
+            onError: { error in
+                print("❌ [FeedDetail] Like error: \(error.localizedDescription)")
             }
-            
-            await syncLikeWithServer(visitId: visitId, desiredState: finalDesiredState)
-        }
-    }
-    
-    private func syncLikeWithServer(visitId: String, desiredState: Bool) async {
-        // Check if UI state still matches what we want to sync
-        guard localIsLiked == desiredState else {
-            print("⚠️ [FeedDetail] UI state changed, skipping sync")
-            return
-        }
-        
-        do {
-            let path = "/functions/v1/likes-toggle?visit_id=\(visitId)"
-            print("📤 [FeedDetail] Calling API: \(path)")
-            
-            struct LikeToggleResponse: Codable {
-                let visitId: String
-                let liked: Bool
-                let likeCount: Int
-                let createdAt: String?
-            }
-            
-            let response: LikeToggleResponse = try await SupabaseClient.shared.post(
-                path: path,
-                body: [:],
-                requiresAuth: true
-            )
-            
-            guard !Task.isCancelled else { return }
-            
-            // If server state matches desired state, sync the count
-            if response.liked == desiredState {
-                localLikeCount = response.likeCount
-                print("✅ [FeedDetail] Synced - liked: \(response.liked), count: \(response.likeCount)")
-            } else {
-                // Server disagrees - retry
-                print("⚠️ [FeedDetail] Server mismatch, retrying...")
-                await syncLikeWithServer(visitId: visitId, desiredState: desiredState)
-                return
-            }
-            
-            // Update FeedViewModel if it has this item
-            feedViewModel.updateLikeState(visitId: visitId, isLiked: response.liked, likeCount: response.likeCount)
-            
-        } catch {
-            guard !Task.isCancelled else { return }
-            print("❌ [FeedDetail] Like error: \(error.localizedDescription)")
-            // Don't revert - keep UI state as user intended
-        }
+        )
     }
     
     private var currentIsLiked: Bool {
@@ -578,21 +522,21 @@ struct FeedDetailView: View {
     }
     
     private var currentCommentCount: Int {
-        feedViewModel.items.first(where: { $0.id == displayItem.id })?.commentCount ?? displayItem.commentCount
+        feedViewModel?.items.first(where: { $0.id == displayItem.id })?.commentCount ?? displayItem.commentCount  // ✅ Optional chaining
     }
     
     // MARK: - Fetch Like Status
     
     private func fetchLikeStatus() {
         // If we already have valid data from FeedViewModel, use that
-        if let feedItem = feedViewModel.getItem(id: displayItem.id) {
+        if let feedItem = feedViewModel?.getItem(id: displayItem.id) {  // ✅ Optional chaining
             localIsLiked = feedItem.isLiked
             localLikeCount = feedItem.likeCount
             print("📋 [FeedDetail] Using FeedViewModel state: liked=\(localIsLiked), count=\(localLikeCount)")
             return
         }
         
-        // Otherwise fetch from API (for visits opened from ProfileView)
+        // Otherwise fetch from API (for visits opened from ProfileView or PlaceVisitsListView)
         Task {
             do {
                 let path = "/functions/v1/likes-list?visit_id=\(displayItem.id)&limit=1"
@@ -1131,8 +1075,7 @@ struct VisitActionSheet: View {
 #Preview {
     NavigationStack {
         FeedDetailView(
-            feedItem: .preview,
-            feedViewModel: FeedViewModel()
+            feedItem: .preview
         )
     }
 }

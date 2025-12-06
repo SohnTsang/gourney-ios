@@ -1,30 +1,59 @@
-//
-//  MapClusteringHelper.swift
-//  gourney
-//
-//  Pin clustering logic with loose clustering and performance optimization
-//
+// Utilities/ClusterAnnotation.swift
+// Shared types for map annotations
+// ✅ PinAnnotation: Used by DiscoverView for map pins
 
 import Foundation
 import CoreLocation
 import MapKit
 
+// MARK: - Pin Annotation (Shared Type)
+
+struct PinAnnotation: Identifiable, Equatable {
+    let id: String
+    let coordinate: CLLocationCoordinate2D
+    let isVisited: Bool  // true = red pin (DB), false = grey pin (external)
+    let place: Place?
+    let searchResult: PlaceSearchResult?
+    
+    static func == (lhs: PinAnnotation, rhs: PinAnnotation) -> Bool {
+        lhs.id == rhs.id &&
+        lhs.coordinate.latitude == rhs.coordinate.latitude &&
+        lhs.coordinate.longitude == rhs.coordinate.longitude &&
+        lhs.isVisited == rhs.isVisited
+    }
+}
+
 // MARK: - Cluster Annotation
 
-/// Represents a cluster of pins on the map
 struct ClusterAnnotation: Identifiable {
     let id: String
     let coordinate: CLLocationCoordinate2D
-    let pinIds: [String]  // IDs of pins in this cluster
     let count: Int
-    let isVisited: Bool  // True if any pin in cluster is visited
+    let pins: [PinAnnotation]
     
-    init(coordinate: CLLocationCoordinate2D, pins: [PinAnnotation]) {
-        self.id = UUID().uuidString
-        self.coordinate = coordinate
-        self.pinIds = pins.map { $0.id }
-        self.count = pins.count
-        self.isVisited = pins.contains { $0.isVisited }
+    var hasVisited: Bool {
+        pins.contains { $0.isVisited }
+    }
+}
+
+// MARK: - Cluster Item (Union Type)
+
+enum ClusterItem: Identifiable {
+    case single(PinAnnotation)
+    case cluster(ClusterAnnotation)
+    
+    var id: String {
+        switch self {
+        case .single(let pin): return pin.id
+        case .cluster(let cluster): return cluster.id
+        }
+    }
+    
+    var coordinate: CLLocationCoordinate2D {
+        switch self {
+        case .single(let pin): return pin.coordinate
+        case .cluster(let cluster): return cluster.coordinate
+        }
     }
 }
 
@@ -32,137 +61,67 @@ struct ClusterAnnotation: Identifiable {
 
 class MapClusteringHelper {
     
-    /// Minimum distance (in meters) for pins to cluster together
-    /// Lower = looser clustering (pins separate more easily)
-    private static let baseClusteringDistance: Double = 50.0  // 50 meters base
-    
-    /// Perform clustering based on current map zoom level
-    /// - Parameters:
-    ///   - pins: All pins to cluster
-    ///   - region: Current map region (determines zoom level)
-    /// - Returns: Array of clusters (single pins or grouped)
-    static func clusterPins(
-        _ pins: [PinAnnotation],
-        in region: MKCoordinateRegion
-    ) -> [ClusterItem] {
+    /// Cluster pins based on zoom level
+    static func cluster(pins: [PinAnnotation], zoomLevel: Double) -> [ClusterItem] {
+        guard !pins.isEmpty else { return [] }
         
-        // Calculate zoom level from span
-        let zoomLevel = calculateZoomLevel(from: region)
-        
-        // Adaptive clustering distance based on zoom
-        let clusteringDistance = calculateClusteringDistance(for: zoomLevel)
-        
-        print("🔍 [Clustering] Zoom: \(String(format: "%.2f", zoomLevel)), Distance: \(Int(clusteringDistance))m")
-        
-        // If zoomed in very close, don't cluster at all
-        if zoomLevel > 16 {
+        // At high zoom (street level), don't cluster
+        if zoomLevel > 15 {
             return pins.map { .single($0) }
         }
         
-        var unclustered = pins
-        var clusters: [ClusterItem] = []
+        // Clustering distance based on zoom
+        let clusterDistance = clusteringDistance(for: zoomLevel)
         
-        // Greedy clustering algorithm
-        while !unclustered.isEmpty {
-            let current = unclustered.removeFirst()
-            var clusterGroup = [current]
+        var clusters: [ClusterItem] = []
+        var processed = Set<String>()
+        
+        for pin in pins {
+            guard !processed.contains(pin.id) else { continue }
             
             // Find nearby pins
-            unclustered.removeAll { pin in
-                let distance = current.coordinate.distance(to: pin.coordinate)
-                if distance < clusteringDistance {
-                    clusterGroup.append(pin)
-                    return true
+            var nearbyPins = [pin]
+            processed.insert(pin.id)
+            
+            for other in pins {
+                guard !processed.contains(other.id) else { continue }
+                
+                let distance = pin.coordinate.distance(to: other.coordinate)
+                if distance < clusterDistance {
+                    nearbyPins.append(other)
+                    processed.insert(other.id)
                 }
-                return false
             }
             
-            // Create cluster or single pin
-            if clusterGroup.count > 1 {
-                let centerCoord = calculateCentroid(of: clusterGroup)
-                let cluster = ClusterAnnotation(coordinate: centerCoord, pins: clusterGroup)
-                clusters.append(.cluster(cluster))
+            if nearbyPins.count == 1 {
+                clusters.append(.single(pin))
             } else {
-                clusters.append(.single(current))
+                // Calculate cluster center
+                let avgLat = nearbyPins.reduce(0) { $0 + $1.coordinate.latitude } / Double(nearbyPins.count)
+                let avgLng = nearbyPins.reduce(0) { $0 + $1.coordinate.longitude } / Double(nearbyPins.count)
+                
+                let cluster = ClusterAnnotation(
+                    id: "cluster_\(pin.id)",
+                    coordinate: CLLocationCoordinate2D(latitude: avgLat, longitude: avgLng),
+                    count: nearbyPins.count,
+                    pins: nearbyPins
+                )
+                clusters.append(.cluster(cluster))
             }
         }
-        
-        print("📍 [Clustering] \(pins.count) pins → \(clusters.count) items")
         
         return clusters
     }
     
-    // MARK: - Private Helpers
-    
-    /// Calculate zoom level from map region span
-    private static func calculateZoomLevel(from region: MKCoordinateRegion) -> Double {
-        let longitudeDelta = region.span.longitudeDelta
-        
-        // Zoom level formula (0 = world, 20 = street level)
-        let zoomLevel = log2(360.0 / longitudeDelta)
-        
-        return max(0, min(20, zoomLevel))
-    }
-    
-    /// Calculate adaptive clustering distance based on zoom level
-    /// - Zoomed out (city level): Large distance = more clustering
-    /// - Zoomed in (street level): Small distance = loose clustering
-    private static func calculateClusteringDistance(for zoomLevel: Double) -> Double {
+    /// Clustering distance in meters based on zoom level
+    private static func clusteringDistance(for zoomLevel: Double) -> Double {
         switch zoomLevel {
-        case 0..<10:   // World/Country level
-            return 5000.0  // 5km
-        case 10..<12:  // City level
-            return 1000.0  // 1km
-        case 12..<14:  // District level
-            return 300.0   // 300m
-        case 14..<16:  // Neighborhood level
-            return 100.0   // 100m (loose clustering)
-        case 16..<18:  // Street level
-            return 30.0    // 30m (very loose)
-        default:       // Building level
-            return 0.0     // No clustering
-        }
-    }
-    
-    /// Calculate centroid (center point) of multiple pins
-    private static func calculateCentroid(of pins: [PinAnnotation]) -> CLLocationCoordinate2D {
-        var totalLat = 0.0
-        var totalLng = 0.0
-        
-        for pin in pins {
-            totalLat += pin.coordinate.latitude
-            totalLng += pin.coordinate.longitude
-        }
-        
-        return CLLocationCoordinate2D(
-            latitude: totalLat / Double(pins.count),
-            longitude: totalLng / Double(pins.count)
-        )
-    }
-}
-
-// MARK: - Cluster Item Enum
-
-/// Represents either a single pin or a cluster
-enum ClusterItem: Identifiable {
-    case single(PinAnnotation)
-    case cluster(ClusterAnnotation)
-    
-    var id: String {
-        switch self {
-        case .single(let pin):
-            return pin.id
-        case .cluster(let cluster):
-            return cluster.id
-        }
-    }
-    
-    var coordinate: CLLocationCoordinate2D {
-        switch self {
-        case .single(let pin):
-            return pin.coordinate
-        case .cluster(let cluster):
-            return cluster.coordinate
+        case 0..<5:   return 5000   // World view: 5km
+        case 5..<8:   return 1000   // Country: 1km
+        case 8..<11:  return 300    // City: 300m
+        case 11..<14: return 100    // District: 100m
+        case 14..<16: return 30     // Street: 30m
+        default:      return 0      // Building: no clustering
         }
     }
 }
@@ -170,10 +129,10 @@ enum ClusterItem: Identifiable {
 // MARK: - CLLocationCoordinate2D Extension
 
 extension CLLocationCoordinate2D {
-    /// Calculate distance to another coordinate in meters
-    func distance(to coordinate: CLLocationCoordinate2D) -> Double {
-        let location1 = CLLocation(latitude: latitude, longitude: longitude)
-        let location2 = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
-        return location1.distance(from: location2)
+    /// Calculate distance in meters to another coordinate
+    func distance(to other: CLLocationCoordinate2D) -> Double {
+        let loc1 = CLLocation(latitude: latitude, longitude: longitude)
+        let loc2 = CLLocation(latitude: other.latitude, longitude: other.longitude)
+        return loc1.distance(from: loc2)
     }
 }

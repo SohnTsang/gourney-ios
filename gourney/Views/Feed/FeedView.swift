@@ -276,7 +276,7 @@ struct FeedView: View {
     // MARK: - Search Bar Button
     
     private var searchBarButton: some View {
-        SearchBarButton(placeholder: "Search places, users...") {
+        SearchBarButton(placeholder: "Search places, users") {
             showSearch = true
         }
         .padding(.horizontal, 16)

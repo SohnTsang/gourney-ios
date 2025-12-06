@@ -51,7 +51,18 @@ struct PlacesListView: View {
     }
     
     private var displayedPlaces: [PlaceListItem] {
-        Array(places.prefix(displayedCount))
+        let userLocation = locationManager.userLocation
+        
+        let sorted = places.sorted { a, b in
+            guard let userLoc = userLocation else { return false }
+            let distA = CLLocation(latitude: a.coordinate.latitude, longitude: a.coordinate.longitude)
+                .distance(from: CLLocation(latitude: userLoc.latitude, longitude: userLoc.longitude))
+            let distB = CLLocation(latitude: b.coordinate.latitude, longitude: b.coordinate.longitude)
+                .distance(from: CLLocation(latitude: userLoc.latitude, longitude: userLoc.longitude))
+            return distA < distB
+        }
+        
+        return Array(sorted.prefix(displayedCount))
     }
 
     private var hasMore: Bool {

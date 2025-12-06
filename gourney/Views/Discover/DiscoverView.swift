@@ -1,5 +1,9 @@
 // Views/Discover/DiscoverView.swift
-// ✅ WITH PIN CLUSTERING: Loose clustering logic, zoom-adaptive, performance optimized
+// ✅ FIXED: Initial load centers on user location properly
+// ✅ FIXED: Memory management - proper cleanup on disappear
+// ✅ FIXED: CPU optimization - debounced map updates, limited pins
+// ✅ FIXED: Map region preserved on list/map toggle
+// ✅ FIXED: Compiler type-check complexity - broken into smaller views
 
 import SwiftUI
 import MapKit
@@ -7,238 +11,392 @@ import MapKit
 struct DiscoverView: View {
     @StateObject private var viewModel = DiscoverViewModel()
     @StateObject private var locationManager = LocationManager.shared
+    @StateObject private var toastManager = ToastManager.shared
     @State private var searchText = ""
     @Environment(\.colorScheme) private var colorScheme
     
+    // Map state
     @State private var region = MKCoordinateRegion(
         center: CLLocationCoordinate2D(latitude: 35.6762, longitude: 139.6503),
-        span: MKCoordinateSpan(latitudeDelta: 0.1, longitudeDelta: 0.1)
+        span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
     )
-    @State private var mapPosition: MapCameraPosition = .region(
-        MKCoordinateRegion(
-            center: CLLocationCoordinate2D(latitude: 35.6762, longitude: 139.6503),
-            span: MKCoordinateSpan(latitudeDelta: 0.1, longitudeDelta: 0.1)
-        )
-    )
-    @State private var savedMapRegion: MKCoordinateRegion?
+    @State private var mapPosition: MapCameraPosition = .automatic
+    
+    // Track if we've centered on user location
+    @State private var hasInitializedLocation = false
+    
+    // Store region before switching to list view
+    @State private var savedRegionBeforeList: MKCoordinateRegion?
+    
+    // UI state
     @State private var showLocationPermissionAlert = false
-    @State private var lastKnownLocation: CLLocationCoordinate2D?
-    @State private var mapRefreshTask: Task<Void, Never>?
     @State private var selectedPinId: String?
-    @State private var suppressRegionRefresh = false
-    @State private var isResearching = false  // ✅ NEW: Prevent zoom during research
-    @State private var annotations: [PinAnnotation] = []
     @State private var showListView = false
     @State private var showResearchButton = false
+    @State private var showFilterSheet = false
     
-    // ✅ NEW: Clustering state
-    @State private var clusterItems: [ClusterItem] = []
-    @State private var lastClusteringRegion: MKCoordinateRegion?
-    @State private var clusterDebounceTask: Task<Void, Never>?
+    // PERFORMANCE: Use shared PinAnnotation
+    @State private var visiblePins: [PinAnnotation] = []
+    
+    // PERFORMANCE: Debounce tasks with proper cancellation
+    @State private var mapUpdateTask: Task<Void, Never>?
+    @State private var pinUpdateTask: Task<Void, Never>?
+    @State private var locationWaitTask: Task<Void, Never>?
+    
+    // Constants
+    private let maxVisiblePins = 30
     
     var body: some View {
-        
-        
         NavigationStack {
-            
-            ZStack(alignment: .top) {
-                // ✅ Map or List View
-                if showListView {
-                    listView
-                        .id("listView")
-                } else {
-                    mapView
-                        .id("mapView")
-                        .onMapCameraChange { context in
-                            guard !isResearching else { return }  // ✅ Don't update during research
-                            region = context.region
-                            handleMapRegionChange(context.region.center)
-                            
-                            // ✅ NEW: Re-cluster when zoom changes significantly
-                            updateClustersIfNeeded(for: context.region)
+            mainContentView
+        }
+    }
+    
+    // MARK: - Main Content (Broken up to reduce complexity)
+    
+    private var mainContentView: some View {
+        ZStack(alignment: .top) {
+            mapOrListContent
+            topSection
+            controlsOverlay
+            loadingOverlayIfNeeded
+        }
+        .navigationBarHidden(true)
+        .sheet(isPresented: $viewModel.showPlaceInfo) { sheetContent }
+        .overlay { filterPopupOverlay }
+        .animation(.easeOut(duration: 0.2), value: showFilterSheet)
+        .modifier(DiscoverOnChangeModifier(
+            viewModel: viewModel,
+            toastManager: toastManager,
+            locationManager: locationManager,
+            selectedPinId: $selectedPinId,
+            hasInitializedLocation: $hasInitializedLocation,
+            region: $region,
+            mapPosition: $mapPosition,
+            updateVisiblePins: updateVisiblePins,
+            scheduleVisiblePinUpdate: scheduleVisiblePinUpdate
+        ))
+        .onChange(of: showListView) { oldValue, newValue in
+            if oldValue && !newValue {
+                restoreMapRegion()
+            }
+        }
+        .alert("Location Permission Required", isPresented: $showLocationPermissionAlert) {
+            alertButtons
+        } message: {
+            Text("Please enable location access to see nearby places")
+        }
+        .task { await initialLoad() }
+        .onDisappear { cleanup() }
+    }
+    
+    @ViewBuilder
+    private var mapOrListContent: some View {
+        if showListView {
+            listView
+        } else {
+            optimizedMapView
+        }
+    }
+    
+    @ViewBuilder
+    private var controlsOverlay: some View {
+        researchButtonIfNeeded
+        viewToggleButton
+        mapControlsIfNeeded
+    }
+    
+    @ViewBuilder
+    private var researchButtonIfNeeded: some View {
+        if showResearchButton && !showListView {
+            researchButton
+        }
+    }
+    
+    @ViewBuilder
+    private var mapControlsIfNeeded: some View {
+        if !showListView {
+            mapControls
+        }
+    }
+    
+    @ViewBuilder
+    private var loadingOverlayIfNeeded: some View {
+        if viewModel.isLoading {
+            loadingOverlay
+        }
+    }
+    
+    @ViewBuilder
+    private var sheetContent: some View {
+        if let place = viewModel.selectedPlace {
+            PlaceInfoCard(place: place, viewModel: viewModel)
+        }
+    }
+    
+    @ViewBuilder
+    private var filterPopupOverlay: some View {
+        if showFilterSheet {
+            SearchFilterPopup(
+                isPresented: $showFilterSheet,
+                filters: $viewModel.filters,
+                onApply: {
+                    viewModel.applyFilters()
+                    updateVisiblePins()
+                }
+            )
+            .transition(.opacity.combined(with: .scale(scale: 0.95)))
+            .zIndex(100)
+        }
+    }
+    
+    @ViewBuilder
+    private var alertButtons: some View {
+        Button("Settings") {
+            if let url = URL(string: UIApplication.openSettingsURLString) {
+                UIApplication.shared.open(url)
+            }
+        }
+        Button("Cancel", role: .cancel) {}
+    }
+    
+    // MARK: - Initial Load
+    
+    private func initialLoad() async {
+        if locationManager.authorizationStatus == .notDetermined {
+            locationManager.requestPermission()
+        }
+        
+        if let userLocation = locationManager.userLocation {
+            centerOnUserLocation(userLocation)
+        } else {
+            locationWaitTask = Task {
+                for _ in 0..<30 {
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    if Task.isCancelled { return }
+                    
+                    if let location = locationManager.userLocation {
+                        await MainActor.run {
+                            centerOnUserLocation(location)
                         }
-                }
-                
-                topSection
-                
-                // ✅ Research button (below search bar)
-                if showResearchButton && !showListView {
-                    researchButton
-                }
-                
-                // ✅ List/Map Toggle Button (Top-Left)
-                viewToggleButton
-                
-                // ✅ Map controls (only show in map view)
-                if !showListView {
-                    mapControls
-                }
-                
-                if let error = viewModel.error {
-                    VStack {
-                        Spacer()
-                        ErrorBanner(message: error)
-                            .padding()
-                            .padding(.bottom, 80)
+                        return
                     }
                 }
                 
-                if viewModel.isLoading {
-                    Color.black.opacity(0.3)
-                        .ignoresSafeArea()
-                    ProgressView()
-                        .scaleEffect(1.5)
-                        .tint(.white)
-                }
-            }
-            .navigationBarHidden(true)
-            .sheet(isPresented: $viewModel.showPlaceInfo) {
-                if let place = viewModel.selectedPlace {
-                    PlaceInfoCard(place: place, viewModel: viewModel)
-                }
-            }
-            .onChange(of: viewModel.showPlaceInfo) { _, isShowing in
-                if !isShowing {
-                    selectedPinId = nil
-                }
-            }
-            .onChange(of: viewModel.searchResults) { _, _ in
-                updateAnnotations()
-            }
-            .onChange(of: viewModel.beenToPlaces) { _, _ in
-                updateAnnotations()
-            }
-            .alert("Location Permission Required", isPresented: $showLocationPermissionAlert) {
-                Button("Settings") {
-                    if let url = URL(string: UIApplication.openSettingsURLString) {
-                        UIApplication.shared.open(url)
+                await MainActor.run {
+                    if !hasInitializedLocation {
+                        hasInitializedLocation = true
+                        mapPosition = .region(region)
+                        Task {
+                            await viewModel.fetchBeenToPlaces(in: region)
+                            updateVisiblePins()
+                        }
                     }
                 }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("Please enable location access to see nearby places")
-            }
-            .task {
-                await loadData()
-            }
-            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
-                print("⚠️ MEMORY WARNING - Force cleanup")
-                clusterItems = []
-                annotations = []
-                URLCache.shared.removeAllCachedResponses()
-            }
-            .onDisappear {
-                // ✅ FIX: Cleanup when view disappears
-                cleanup()
             }
         }
     }
     
-    // ✅ NEW: Memory warning handler
-    private func handleMemoryWarning() {
-        print("⚠️ [Memory] Warning received - cleaning up...")
+    private func centerOnUserLocation(_ location: CLLocationCoordinate2D) {
+        guard !hasInitializedLocation else { return }
         
-        // Clear clusters
-        clusterItems.removeAll(keepingCapacity: false)
-        lastClusteringRegion = nil
+        hasInitializedLocation = true
         
-        // Cancel tasks
-        mapRefreshTask?.cancel()
+        region = MKCoordinateRegion(
+            center: location,
+            span: MKCoordinateSpan(latitudeDelta: 0.02, longitudeDelta: 0.02)
+        )
+        mapPosition = .region(region)
         
-        // Force cleanup
-        MemoryDebugHelper.shared.logMemory(tag: "⚠️ Before Cleanup")
+        print("📍 [Discover] Centered on user: (\(String(format: "%.4f", location.latitude)), \(String(format: "%.4f", location.longitude)))")
         
-        // Give system time to reclaim
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            MemoryDebugHelper.shared.logMemory(tag: "✅ After Cleanup")
+        Task {
+            await viewModel.fetchBeenToPlaces(in: region)
+            updateVisiblePins()
         }
     }
     
-    // ✅ NEW: View cleanup
-    private func cleanup() {
-        mapRefreshTask?.cancel()
-        clusterItems.removeAll(keepingCapacity: false)
-        annotations.removeAll(keepingCapacity: false)
-        lastClusteringRegion = nil
+    // MARK: - Optimized Map View
+    
+    private var optimizedMapView: some View {
+        Map(position: $mapPosition) {
+            userLocationAnnotation
+            pinAnnotations
+        }
+        .mapStyle(.standard(pointsOfInterest: .excludingAll))
+        .onMapCameraChange(frequency: .onEnd) { context in
+            handleMapCameraChange(context.region)
+        }
+        .ignoresSafeArea(edges: .top)
+        .onTapGesture { dismissSelection() }
+    }
+    
+    @MapContentBuilder
+    private var userLocationAnnotation: some MapContent {
+        if let userLocation = locationManager.userLocation {
+            Annotation("", coordinate: userLocation) {
+                UserLocationDot()
+            }
+            .annotationTitles(.hidden)
+        }
+    }
+    
+    @MapContentBuilder
+    private var pinAnnotations: some MapContent {
+        ForEach(visiblePins) { pin in
+            Annotation("", coordinate: pin.coordinate) {
+                SimplePinView(
+                    isVisited: pin.isVisited,
+                    isSelected: pin.id == selectedPinId,
+                    onTap: { handlePinTap(pin) }
+                )
+            }
+            .annotationTitles(.hidden)
+        }
+    }
+    
+    private func panToRegion(_ newRegion: MKCoordinateRegion) {
+        print("🗺️ [Pan] Moving map to show results")
+        
+        withAnimation(.easeInOut(duration: 0.5)) {
+            region = newRegion
+            mapPosition = .region(newRegion)
+        }
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            viewModel.shouldPanToResults = false
+            viewModel.suggestedRegion = nil
+            updateVisiblePins()
+        }
+    }
+    
+    private func restoreMapRegion() {
+        guard let savedRegion = savedRegionBeforeList else { return }
+        
+        print("🗺️ [Restore] Restoring map region after list view")
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            region = savedRegion
+            mapPosition = .region(savedRegion)
+            savedRegionBeforeList = nil
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                updateVisiblePins()
+            }
+        }
+    }
+    
+    // MARK: - Simple Pin View
+    
+    private struct SimplePinView: View {
+        let isVisited: Bool
+        let isSelected: Bool
+        let onTap: () -> Void
+        
+        var body: some View {
+            Button(action: onTap) {
+                Circle()
+                    .fill(isVisited ? Color(red: 1.0, green: 0.4, blue: 0.4) : Color.gray)
+                    .frame(width: isSelected ? 36 : 28, height: isSelected ? 36 : 28)
+                    .overlay(
+                        Image(systemName: "fork.knife")
+                            .font(.system(size: isSelected ? 14 : 11, weight: .bold))
+                            .foregroundColor(.white)
+                    )
+                    .shadow(color: .black.opacity(0.3), radius: isSelected ? 6 : 3, y: 2)
+            }
+            .buttonStyle(.plain)
+            .animation(.easeOut(duration: 0.15), value: isSelected)
+        }
+    }
+    
+    // MARK: - User Location Dot
+    
+    private struct UserLocationDot: View {
+        var body: some View {
+            ZStack {
+                Circle()
+                    .fill(Color.blue.opacity(0.2))
+                    .frame(width: 40, height: 40)
+                Circle()
+                    .fill(Color.blue)
+                    .frame(width: 14, height: 14)
+                    .overlay(Circle().stroke(Color.white, lineWidth: 2))
+            }
+        }
     }
     
     // MARK: - Top Section
+    
     private var topSection: some View {
         VStack(spacing: 0) {
-            // ✅ Top bar with filter tabs only
-            ZStack {
-                Rectangle()
-                    .fill(.bar)
-                    .ignoresSafeArea(edges: .top)
-                
-                HStack(spacing: 40) {
-                    // All Tab
-                    Button(action: {
-                        if viewModel.showFollowingOnly {
-                            viewModel.showFollowingOnly = false
-                            Task {
-                                await viewModel.fetchBeenToPlaces(in: region)
-                                updateAnnotations()
-                            }
-                        }
-                    }) {
-                        VStack(spacing: 4) {
-                            Text("All")
-                                .font(.system(size: 18, weight: .semibold))
-                                .foregroundColor(viewModel.showFollowingOnly ? .secondary : Color(red: 1.0, green: 0.4, blue: 0.4))
-                            
-                            Rectangle()
-                                .fill(viewModel.showFollowingOnly ? Color.clear : Color(red: 1.0, green: 0.4, blue: 0.4))
-                                .frame(height: 2)
-                        }
-                    }
-                    .frame(width: 100)
-                    
-                    // Following Tab
-                    Button(action: {
-                        if !viewModel.showFollowingOnly {
-                            viewModel.showFollowingOnly = true
-                            Task {
-                                await viewModel.fetchBeenToPlaces(in: region)
-                                updateAnnotations()
-                            }
-                        }
-                    }) {
-                        VStack(spacing: 4) {
-                            Text("Following")
-                                .font(.system(size: 18, weight: .semibold))
-                                .foregroundColor(viewModel.showFollowingOnly ? Color(red: 1.0, green: 0.4, blue: 0.4) : .secondary)
-                            
-                            Rectangle()
-                                .fill(viewModel.showFollowingOnly ? Color(red: 1.0, green: 0.4, blue: 0.4) : Color.clear)
-                                .frame(height: 2)
-                        }
-                    }
-                    .frame(width: 100)
-                }
-                .padding(.top, 8)
-                .padding(.bottom, 12)
-            }
-            .frame(height: 45)
+            tabBarSection
+            searchBarSection
+        }
+    }
+    
+    private var tabBarSection: some View {
+        ZStack(alignment: .bottom) {
+            Rectangle()
+                .fill(.bar)
+                .ignoresSafeArea(edges: .top)
             
-            // ✅ Search bar below (narrower, solid background, reduced height)
-            SearchBarView(
-                text: $searchText,
-                isSearching: viewModel.isSearching,
-                onClear: {
-                    searchText = ""
-                    viewModel.clearSearch()
-                },
-                onSearch: {
-                    viewModel.triggerSearch(
-                        query: searchText,
-                        mapCenter: region.center
-                    )
+            // ✅ Tabs aligned to bottom so underline touches bar bottom
+            HStack(spacing: 40) {
+                FilterTab(title: "All", isSelected: !viewModel.showFollowingOnly) {
+                    if viewModel.showFollowingOnly {
+                        viewModel.showFollowingOnly = false
+                        Task { await refreshPlaces() }
+                    }
                 }
-            )
-            .padding(.horizontal, 70)
-            .padding(.top, 12)
-            .padding(.bottom, 12)  // ✅ Increased bottom padding
+                
+                FilterTab(title: "Following", isSelected: viewModel.showFollowingOnly) {
+                    if !viewModel.showFollowingOnly {
+                        viewModel.showFollowingOnly = true
+                        Task { await refreshPlaces() }
+                    }
+                }
+            }
+            .padding(.bottom, 0)  // ✅ Underline at very bottom
+        }
+        .frame(height: 44)
+    }
+    
+    private var searchBarSection: some View {
+        SearchBarWithFilter(
+            text: $searchText,
+            isSearching: viewModel.isSearching,
+            isFilterActive: viewModel.filters.isActive,
+            onClear: handleSearchClear,
+            onSearch: handleSearch,
+            onFilter: { showFilterSheet = true }
+        )
+        .padding(.horizontal, 70)
+        .padding(.top, 14)  // ✅ More space after tab underline
+        .padding(.bottom, 12)
+    }
+    
+    // MARK: - Filter Tab
+    
+    private struct FilterTab: View {
+        let title: String
+        let isSelected: Bool
+        let action: () -> Void
+        
+        var body: some View {
+            Button(action: action) {
+                VStack(spacing: 6) {
+                    Text(title)
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(isSelected ? Color(red: 1.0, green: 0.4, blue: 0.4) : .secondary)
+                    
+                    // ✅ Underline at bottom
+                    Rectangle()
+                        .fill(isSelected ? Color(red: 1.0, green: 0.4, blue: 0.4) : Color.clear)
+                        .frame(height: 2)
+                }
+            }
+            .frame(width: 100)
         }
     }
     
@@ -246,60 +404,21 @@ struct DiscoverView: View {
     
     private var researchButton: some View {
         VStack {
-            Spacer()
-                .frame(height: 110)
+            Spacer().frame(height: 110)
             
-            Button(action: {
-                // ✅ LOG: Zoom level BEFORE search
-                print("🔍 [Search This Area] CLICKED")
-                print("   BEFORE - Center: \(String(format: "%.6f", region.center.latitude)), \(String(format: "%.6f", region.center.longitude))")
-                print("   BEFORE - Span: latΔ=\(String(format: "%.6f", region.span.latitudeDelta)), lngΔ=\(String(format: "%.6f", region.span.longitudeDelta))")
-                print("   BEFORE - Zoom Level: \(String(format: "%.2f", log2(360.0 / region.span.longitudeDelta)))")
-                
-                showResearchButton = false
-                isResearching = true  // ✅ Block map updates
-                
-                let savedRegion = region  // ✅ Save EXACT region state
-                
-                Task {
-                    await viewModel.fetchBeenToPlaces(in: savedRegion)
-                    
-                    await MainActor.run {
-                        // ✅ Force restore saved region (ignore any changes during fetch)
-                        region = savedRegion
-                        mapPosition = .region(savedRegion)
-                        
-                        print("   ✅ RESTORED - Center: \(String(format: "%.6f", savedRegion.center.latitude)), \(String(format: "%.6f", savedRegion.center.longitude))")
-                        print("   ✅ RESTORED - Span: latΔ=\(String(format: "%.6f", savedRegion.span.latitudeDelta)), lngΔ=\(String(format: "%.6f", savedRegion.span.longitudeDelta))")
-                        print("   ✅ RESTORED - Zoom Level: \(String(format: "%.2f", log2(360.0 / savedRegion.span.longitudeDelta)))")
-                        
-                        updateAnnotations()  // Update pins
-                        
-                        isResearching = false  // ✅ Unblock AFTER everything done
-                        
-                        print("   ✅ Search complete\n")
-                    }
-                }
-            }) {
+            Button(action: handleResearchArea) {
                 HStack(spacing: 6) {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: 13, weight: .semibold))
-                    
                     Text(getLocalizedResearchText())
                         .font(.system(size: 14, weight: .semibold))
                 }
                 .foregroundColor(.white)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
-                .background(
-                    LinearGradient(
-                        colors: [Color(red: 1.0, green: 0.4, blue: 0.4), Color(red: 0.95, green: 0.3, blue: 0.35)],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
+                .background(Color(red: 1.0, green: 0.4, blue: 0.4))
                 .cornerRadius(20)
-                .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
+                .shadow(color: .black.opacity(0.2), radius: 4, y: 2)
             }
             
             Spacer()
@@ -320,52 +439,25 @@ struct DiscoverView: View {
     // MARK: - View Toggle Button
     
     private var viewToggleButton: some View {
-        GeometryReader { geometry in
-            VStack {
-                Spacer()
-                    .frame(height: geometry.size.height * 0.079)
-                
-                HStack {
-                    Button(action: {
-                        print("🔄 [Toggle] Switching view")
-                        print("   Current view: \(showListView ? "List" : "Map")")
-                        
-                        if !showListView {
-                            // ✅ SAVE map position before switching to list
-                            savedMapRegion = region
-                            print("   💾 Saved map region: \(region.center.latitude), \(region.center.longitude)")
-                            print("   💾 Saved span: \(region.span.latitudeDelta), \(region.span.longitudeDelta)")
-                        }
-                        
-                        showListView.toggle()  // ✅ No animation
-                        showResearchButton = false  // ✅ Hide button when switching views
-
-                        if !showListView {
-                            // ✅ RESTORE map position when switching back to map
-                            if let saved = savedMapRegion {
-                                print("   📍 Restoring map region")
-                                region = saved
-                                mapPosition = .region(saved)
-                            }
-                        }
-                        
-                        print("   New view: \(showListView ? "List" : "Map")")
-                    }) {
-                        Image(systemName: showListView ? "map.fill" : "list.bullet")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
-                            .frame(width: 44, height: 44)
-                            .background(colorScheme == .dark ? Color(.systemGray6) : Color.white)
-                            .clipShape(Circle())
-                            .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 2)
-                    }
-                    .padding(.leading, 16)
-                    
-                    Spacer()
+        VStack {
+            Spacer().frame(height: 62)
+            
+            HStack {
+                Button(action: toggleView) {
+                    Image(systemName: showListView ? "map.fill" : "list.bullet")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
+                        .frame(width: 40, height: 40)
+                        .background(colorScheme == .dark ? Color(.systemGray6) : .white)
+                        .clipShape(Circle())
+                        .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
                 }
+                .padding(.leading, 16)
                 
                 Spacer()
             }
+            
+            Spacer()
         }
     }
     
@@ -373,43 +465,15 @@ struct DiscoverView: View {
     
     private var mapControls: some View {
         VStack(spacing: 12) {
-            Spacer()
-                .frame(height: 50)  // ✅ Reduced from 150 (same as toggle button)
+            Spacer().frame(height: 50)
             
             HStack {
                 Spacer()
                 
-                
                 VStack(spacing: 12) {
-                    Button(action: recenterToUserLocation) {
-                        Image(systemName: "location.fill")
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundColor(isMapCenteredOnUser ? Color(red: 1.0, green: 0.4, blue: 0.4) : (colorScheme == .dark ? .white : .primary))
-                            .frame(width: 36, height: 36)
-                            .background(colorScheme == .dark ? Color(.systemGray6) : Color.white)
-                            .clipShape(Circle())
-                            .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 2)
-                    }
-                    
-                    Button(action: zoomIn) {
-                        Image(systemName: "plus")
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
-                            .frame(width: 36, height: 36)
-                            .background(colorScheme == .dark ? Color(.systemGray6) : Color.white)
-                            .clipShape(Circle())
-                            .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 2)
-                    }
-                    
-                    Button(action: zoomOut) {
-                        Image(systemName: "minus")
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
-                            .frame(width: 36, height: 36)
-                            .background(colorScheme == .dark ? Color(.systemGray6) : Color.white)
-                            .clipShape(Circle())
-                            .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 2)
-                    }
+                    MapControlButton(icon: "location.fill", action: recenterToUser)
+                    MapControlButton(icon: "plus", action: zoomIn)
+                    MapControlButton(icon: "minus", action: zoomOut)
                 }
                 .padding(.trailing, 16)
             }
@@ -418,261 +482,141 @@ struct DiscoverView: View {
         }
     }
     
-    private func recenterToUserLocation() {
-        guard let userLocation = locationManager.userLocation else {
-            if locationManager.authorizationStatus == .notDetermined {
-                locationManager.requestPermission()
-            } else if locationManager.authorizationStatus == .denied {
-                showLocationPermissionAlert = true
-            }
-            return
-        }
+    private struct MapControlButton: View {
+        let icon: String
+        let action: () -> Void
+        @Environment(\.colorScheme) private var colorScheme
         
-        withAnimation(.spring(response: 0.5)) {
-            region = MKCoordinateRegion(
-                center: userLocation,
-                span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
-            )
-            mapPosition = .region(region)
+        var body: some View {
+            Button(action: action) {
+                Image(systemName: icon)
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
+                    .frame(width: 36, height: 36)
+                    .background(colorScheme == .dark ? Color(.systemGray6) : .white)
+                    .clipShape(Circle())
+                    .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
+            }
         }
     }
     
-    // ✅ NEW: List View
+    // MARK: - List View
+    
     private var listView: some View {
-        let allPlaces = convertToListItems()
-        
-        return ZStack {
+        ZStack {
             Color(colorScheme == .dark ? .systemBackground : .systemGroupedBackground)
-                .edgesIgnoringSafeArea(.all)
+                .ignoresSafeArea()
             
             VStack(spacing: 0) {
-                Spacer()
-                    .frame(height: 110)  // Space for top section
+                Spacer().frame(height: 110)
                 
-                PlacesListView(places: allPlaces) { item in
+                PlacesListView(places: convertToListItems()) { item in
                     handleListItemTap(item)
                 }
-
             }
         }
     }
     
-    // ✅ UPDATED: Map View with Clustering
-    private var mapView: some View {
-        Map(position: $mapPosition) {
-            // ✅ USER LOCATION ANNOTATION
-            if let userLocation = locationManager.userLocation {
-                Annotation("", coordinate: userLocation) {
-                    UserLocationView(
-                        accuracy: locationManager.accuracy,
-                        heading: locationManager.heading
-                    )
-                }
-                .annotationTitles(.hidden)
-            }
-
-            // ✅ NEW: Render clusters and single pins
-            ForEach(clusterItems) { item in
-                switch item {
-                case .single(let pin):
-                    // Regular single pin
-                    Annotation("", coordinate: pin.coordinate) {
-                        PinView(
-                            isVisited: pin.isVisited,
-                            isHighlighted: pin.id == selectedPinId,
-                            distance: locationManager.formattedDistance(from: pin.coordinate),
-                            onTap: { handlePinTap(pin) }
-                        )
-                        .allowsHitTesting(pin.id != selectedPinId)
-                    }
-                    
-                case .cluster(let cluster):
-                    // Cluster pin with count
-                    Annotation("", coordinate: cluster.coordinate) {
-                        ClusterPinView(
-                            count: cluster.count,
-                            isVisited: cluster.isVisited,
-                            onTap: { handleClusterTap(cluster) }
-                        )
-                    }
-                }
-            }
-        }
-        .mapStyle(.standard)
-        .edgesIgnoringSafeArea(.top)
-        .onTapGesture {
-            if viewModel.showPlaceInfo {
-                viewModel.showPlaceInfo = false
-                selectedPinId = nil
-            }
+    // MARK: - Loading Overlay
+    
+    private var loadingOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.3).ignoresSafeArea()
+            ProgressView()
+                .scaleEffect(1.5)
+                .tint(.white)
         }
     }
     
-    // MARK: - Clustering Logic
+    // MARK: - Map Camera Change
     
-    /// Update clusters when zoom level changes significantly
-    private func updateClustersIfNeeded(for newRegion: MKCoordinateRegion) {
-        // Check if we should re-cluster (zoom changed significantly)
-        if let lastRegion = lastClusteringRegion {
-            let spanChange = abs(newRegion.span.latitudeDelta - lastRegion.span.latitudeDelta)
-            let threshold = lastRegion.span.latitudeDelta * 0.8  // ✅ Increased: Less frequent updates
-            
-            guard spanChange > threshold else { return }
-        }
+    private func handleMapCameraChange(_ newRegion: MKCoordinateRegion) {
+        region = newRegion
         
-        // ✅ PERFORMANCE: Debounce clustering - wait for zoom to settle
-        clusterDebounceTask?.cancel()
-        clusterDebounceTask = Task {
-            try? await Task.sleep(nanoseconds: 400_000_000) // ✅ 0.4s - let zoom animation finish
+        mapUpdateTask?.cancel()
+        
+        mapUpdateTask = Task {
+            try? await Task.sleep(nanoseconds: 500_000_000)
             guard !Task.isCancelled else { return }
             
             await MainActor.run {
-                updateClusters(for: newRegion)
+                showResearchButton = true
+                scheduleVisiblePinUpdate()
             }
         }
     }
     
-    /// Perform clustering on current annotations
-    private func updateClusters(for region: MKCoordinateRegion) {
-        guard !annotations.isEmpty else {
-            if !clusterItems.isEmpty {
-                clusterItems.removeAll(keepingCapacity: false)
-                lastClusteringRegion = nil
-            }
-            return
-        }
+    private func scheduleVisiblePinUpdate() {
+        pinUpdateTask?.cancel()
         
-        // Use clustering helper
-        let clusters = MapClusteringHelper.clusterPins(annotations, in: region)
-
-        // Update state smoothly
-        clusterItems = clusters
-        lastClusteringRegion = region
-    }
-    
-    /// Handle cluster tap - zoom into cluster area
-    private func handleClusterTap(_ cluster: ClusterAnnotation) {
-        print("📍 [Cluster] Tapped cluster with \(cluster.count) pins")
-        
-        // Find all pins in this cluster
-        let pinsInCluster = annotations.filter { cluster.pinIds.contains($0.id) }
-        
-        guard !pinsInCluster.isEmpty else { return }
-        
-        // Calculate bounding box
-        var minLat = pinsInCluster[0].coordinate.latitude
-        var maxLat = pinsInCluster[0].coordinate.latitude
-        var minLng = pinsInCluster[0].coordinate.longitude
-        var maxLng = pinsInCluster[0].coordinate.longitude
-        
-        for pin in pinsInCluster {
-            minLat = min(minLat, pin.coordinate.latitude)
-            maxLat = max(maxLat, pin.coordinate.latitude)
-            minLng = min(minLng, pin.coordinate.longitude)
-            maxLng = max(maxLng, pin.coordinate.longitude)
-        }
-        
-        let latDiff = maxLat - minLat
-        let lngDiff = maxLng - minLng
-        
-        // Zoom aggressively to separate pins immediately
-        let minZoomSpan = 0.003  // ~300m view
-        let shouldZoomClose = latDiff < 0.001 && lngDiff < 0.001
-        
-        let centerLat = (minLat + maxLat) / 2
-        let centerLng = (minLng + maxLng) / 2
-        
-        // Use aggressive zoom for tight clusters
-        let paddingMultiplier = shouldZoomClose ? 3.0 : 2.0
-        let spanLat = max(latDiff * paddingMultiplier, minZoomSpan)
-        let spanLng = max(lngDiff * paddingMultiplier, minZoomSpan)
-        
-        let newRegion = MKCoordinateRegion(
-            center: CLLocationCoordinate2D(latitude: centerLat, longitude: centerLng),
-            span: MKCoordinateSpan(
-                latitudeDelta: spanLat,
-                longitudeDelta: spanLng
-            )
-        )
-        
-        print("   🔍 Zooming to span: lat=\(String(format: "%.5f", spanLat)), lng=\(String(format: "%.5f", spanLng))")
-        
-        // Animate zoom
-        withAnimation(.easeInOut(duration: 0.4)) {
-            region = newRegion
-            mapPosition = .region(newRegion)
-        }
-        
-        // Re-cluster once after zoom completes (NO RECURSION)
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            updateClusters(for: newRegion)
-        }
-    }
-    
-    // MARK: - Search
-    
-    private func handleSearch() {
-        guard !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        
-        hideKeyboard()
-        
-        let mapCenter = region.center
-        viewModel.triggerSearch(query: searchText, mapCenter: mapCenter)
-    }
-    
-    private func handleSearchClear() {
-        searchText = ""
-        hideKeyboard()
-        viewModel.clearSearch()
-        selectedPinId = nil
-    }
-    
-    // MARK: - Pin Selection
-    
-    private func handlePinTap(_ item: PinAnnotation) {
-        guard selectedPinId != item.id else { return }
-        
-        selectedPinId = item.id
-        // ✅ FIX: Don't call updateClusters - it refreshes entire map!
-        // The pin will highlight automatically via isHighlighted binding
-        
-        // Pan map if needed
-        let screenHeight = UIScreen.main.bounds.height
-        let cardHeight = screenHeight * 0.4
-        let mapCenterY = screenHeight / 2
-        let pinLatDiff = item.coordinate.latitude - region.center.latitude
-        let screenPinY = mapCenterY - (pinLatDiff / region.span.latitudeDelta) * screenHeight
-        
-        if screenPinY > (screenHeight - cardHeight) {
-            let offsetLat = region.span.latitudeDelta * 0.15
-            let newCenter = CLLocationCoordinate2D(
-                latitude: item.coordinate.latitude + offsetLat,
-                longitude: item.coordinate.longitude
-            )
+        pinUpdateTask = Task {
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            guard !Task.isCancelled else { return }
             
-            suppressRegionRefresh = true  // ✅ Prevent research button from showing
-            withAnimation(.easeOut(duration: 0.3)) {
-                let newRegion = MKCoordinateRegion(
-                    center: newCenter,
-                    span: region.span
-                )
-                region = newRegion
-                mapPosition = .region(newRegion)
+            await MainActor.run {
+                updateVisiblePins()
             }
-            
-            // Re-enable after animation
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                suppressRegionRefresh = false
+        }
+    }
+    
+    private func updateVisiblePins() {
+        var newPins: [PinAnnotation] = []
+        newPins.reserveCapacity(maxVisiblePins)
+        
+        let hasSearch = !viewModel.filteredResults.isEmpty
+        
+        if hasSearch {
+            for result in viewModel.filteredResults.prefix(maxVisiblePins) {
+                newPins.append(PinAnnotation(
+                    id: result.id.uuidString,
+                    coordinate: CLLocationCoordinate2D(latitude: result.lat, longitude: result.lng),
+                    isVisited: result.existsInDb,
+                    place: nil,
+                    searchResult: result
+                ))
+            }
+        } else {
+            for placeWithVisits in viewModel.beenToPlaces {
+                let place = placeWithVisits.place
+                guard isInViewport(lat: place.lat, lng: place.lng) else { continue }
+                
+                newPins.append(PinAnnotation(
+                    id: place.id,
+                    coordinate: CLLocationCoordinate2D(latitude: place.lat, longitude: place.lng),
+                    isVisited: true,
+                    place: place,
+                    searchResult: nil
+                ))
+                
+                if newPins.count >= maxVisiblePins { break }
             }
         }
         
-        if let place = item.place {
+        if newPins.map({ $0.id }) != visiblePins.map({ $0.id }) {
+            visiblePins = newPins
+        }
+    }
+    
+    private func isInViewport(lat: Double, lng: Double) -> Bool {
+        let latMin = region.center.latitude - region.span.latitudeDelta
+        let latMax = region.center.latitude + region.span.latitudeDelta
+        let lngMin = region.center.longitude - region.span.longitudeDelta
+        let lngMax = region.center.longitude + region.span.longitudeDelta
+        return lat >= latMin && lat <= latMax && lng >= lngMin && lng <= lngMax
+    }
+    
+    // MARK: - Actions
+    
+    private func handlePinTap(_ pin: PinAnnotation) {
+        guard selectedPinId != pin.id else { return }
+        
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        selectedPinId = pin.id
+        
+        if let searchResult = pin.searchResult {
+            Task { await viewModel.selectSearchResult(searchResult) }
+        } else if let place = pin.place {
             viewModel.selectPlace(place)
-        } else if let searchResult = item.searchResult {
-            Task {
-                await viewModel.selectSearchResult(searchResult)
-            }
         }
     }
     
@@ -680,22 +624,86 @@ struct DiscoverView: View {
         if let place = item.place {
             viewModel.selectPlace(place)
         } else if let searchResult = item.searchResult {
+            Task { await viewModel.selectSearchResult(searchResult) }
+        }
+    }
+    
+    private func handleSearch() {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return }
+        hideKeyboard()
+        viewModel.triggerSearch(query: query, mapCenter: region.center, mapSpan: region.span)
+    }
+    
+    private func handleSearchClear() {
+        searchText = ""
+        hideKeyboard()
+        viewModel.clearSearch()
+        selectedPinId = nil
+        
+        Task {
+            await viewModel.fetchBeenToPlaces(in: region)
+            updateVisiblePins()
+        }
+    }
+    
+    private func handleResearchArea() {
+        showResearchButton = false
+        
+        let activeQuery = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        if !activeQuery.isEmpty {
+            print("🔄 [Search This Area] Re-searching '\(activeQuery)'")
+            viewModel.triggerSearchThisArea(mapCenter: region.center, mapSpan: region.span)
+        } else if !viewModel.lastSearchQuery.isEmpty {
+            print("🔄 [Search This Area] Re-searching last query '\(viewModel.lastSearchQuery)'")
+            searchText = viewModel.lastSearchQuery
+            viewModel.triggerSearchThisArea(mapCenter: region.center, mapSpan: region.span)
+        } else {
+            print("🔄 [Search This Area] Fetching places")
             Task {
-                await viewModel.selectSearchResult(searchResult)
+                await viewModel.fetchBeenToPlaces(in: region)
+                updateVisiblePins()
             }
         }
     }
     
-    // MARK: - Map Updates
+    private func toggleView() {
+        if !showListView {
+            savedRegionBeforeList = region
+            print("🗺️ [Save] Saved map region before list view")
+        }
+        
+        showListView.toggle()
+        showResearchButton = false
+    }
     
-    private var isMapCenteredOnUser: Bool {
-        guard let userLocation = locationManager.userLocation else { return false }
-        let distance = region.center.distance(to: userLocation)
-        return distance < 50
+    private func dismissSelection() {
+        if viewModel.showPlaceInfo {
+            viewModel.showPlaceInfo = false
+            selectedPinId = nil
+        }
+    }
+    
+    private func recenterToUser() {
+        guard let userLocation = locationManager.userLocation else {
+            if locationManager.authorizationStatus == .denied {
+                showLocationPermissionAlert = true
+            }
+            return
+        }
+        
+        withAnimation(.easeInOut(duration: 0.3)) {
+            region = MKCoordinateRegion(
+                center: userLocation,
+                span: MKCoordinateSpan(latitudeDelta: 0.02, longitudeDelta: 0.02)
+            )
+            mapPosition = .region(region)
+        }
     }
     
     private func zoomIn() {
-        withAnimation(.easeInOut(duration: 0.3)) {
+        withAnimation(.easeInOut(duration: 0.2)) {
             region.span.latitudeDelta *= 0.5
             region.span.longitudeDelta *= 0.5
             mapPosition = .region(region)
@@ -703,127 +711,44 @@ struct DiscoverView: View {
     }
     
     private func zoomOut() {
-        withAnimation(.easeInOut(duration: 0.3)) {
-            region.span.latitudeDelta *= 2.0
-            region.span.longitudeDelta *= 2.0
+        withAnimation(.easeInOut(duration: 0.2)) {
+            region.span.latitudeDelta = min(region.span.latitudeDelta * 2, 10)
+            region.span.longitudeDelta = min(region.span.longitudeDelta * 2, 10)
             mapPosition = .region(region)
         }
-        
-        // Add this:
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            self.cleanupAfterZoom()
-        }
     }
     
-    private func cleanupAfterZoom() {
-        // Force cleanup after zoom operations
-        if clusterItems.count > 50 {
-            let temp = clusterItems
-            clusterItems = []
-            clusterItems = temp
-        }
-    }
-    
-    private func handleMapRegionChange(_ center: CLLocationCoordinate2D) {
-        guard !suppressRegionRefresh else { return }
-        
-        if let last = lastKnownLocation {
-            let distance = last.distance(to: center)
-            if distance < 100 {
-                return
-            }
-        }
-        
-        lastKnownLocation = center
-        
-        mapRefreshTask?.cancel()
-        mapRefreshTask = nil  // Release old task
-
-        mapRefreshTask = Task {
-            try? await Task.sleep(nanoseconds: 800_000_000)
-            
-            guard !Task.isCancelled else { return }
-            
-            showResearchButton = true
-        }
+    private func refreshPlaces() async {
+        await viewModel.fetchBeenToPlaces(in: region)
+        updateVisiblePins()
     }
     
     private func convertToListItems() -> [PlaceListItem] {
-        if !viewModel.searchResults.isEmpty {
-            return viewModel.searchResults.map { PlaceListItem(from: $0) }
+        if !viewModel.filteredResults.isEmpty {
+            return viewModel.filteredResults.prefix(50).map { PlaceListItem(from: $0) }
         } else {
-            return viewModel.beenToPlaces.map { PlaceListItem(from: $0.place) }
+            return viewModel.beenToPlaces.prefix(50).map { PlaceListItem(from: $0.place) }
         }
     }
     
-    // ✅ UPDATED: Update annotations and trigger clustering
-    private func updateAnnotations() {
-        let hasSearch = !viewModel.searchResults.isEmpty || viewModel.hasActiveSearch
-        let currentSearchCount = viewModel.searchResults.count
-        let currentBeenToCount = viewModel.beenToPlaces.count
-        
-        if hasSearch && currentSearchCount == 0 && currentBeenToCount == 0 {
-            annotations.removeAll(keepingCapacity: false)
-            clusterItems = []
-            return
-        }
-        
-        if annotations.count == (hasSearch ?
-            currentSearchCount : min(currentBeenToCount, 50)) {
-            return
-        }
-        
-        var newPins: [PinAnnotation] = []
-        newPins.reserveCapacity(50)
-        
-        if hasSearch {
-            if !viewModel.searchResults.isEmpty {
-                for result in viewModel.searchResults {
-                    guard result.lat != 0 || result.lng != 0 else { continue }
-                    guard result.lat >= -90 && result.lat <= 90 &&
-                          result.lng >= -180 && result.lng <= 180 else { continue }
-                    
-                    newPins.append(PinAnnotation(
-                        id: result.id.uuidString,
-                        coordinate: result.coordinate,
-                        isVisited: result.existsInDb,
-                        place: nil,
-                        searchResult: result
-                    ))
-                }
-            }
-        } else {
-            let limitedPlaces = viewModel.beenToPlaces.prefix(50)
-            
-            for placeWithVisits in limitedPlaces {
-                let place = placeWithVisits.place
-                newPins.append(PinAnnotation(
-                    id: place.id,
-                    coordinate: place.coordinate,
-                    isVisited: true,
-                    place: place,
-                    searchResult: nil
-                ))
-            }
-        }
-        
-        annotations = newPins
-        
-        // ✅ Trigger clustering after annotation update
-        updateClusters(for: region)
-    }
+    // MARK: - Cleanup
     
-    private func loadData() async {
-        if locationManager.authorizationStatus == .notDetermined {
-            locationManager.requestPermission()
-        } else if locationManager.authorizationStatus == .denied {
-            showLocationPermissionAlert = true
-        }
+    private func cleanup() {
+        print("🧹 [Discover] Cleaning up...")
         
-        // ✅ FIX: Pass current region to only fetch visible places
-        await viewModel.fetchBeenToPlaces(in: region)
-        updateAnnotations()
-        showResearchButton = false
+        mapUpdateTask?.cancel()
+        mapUpdateTask = nil
+        
+        pinUpdateTask?.cancel()
+        pinUpdateTask = nil
+        
+        locationWaitTask?.cancel()
+        locationWaitTask = nil
+        
+        visiblePins.removeAll(keepingCapacity: false)
+        viewModel.forceCleanup()
+        
+        print("🧹 [Discover] Cleanup complete")
     }
     
     private func hideKeyboard() {
@@ -831,156 +756,147 @@ struct DiscoverView: View {
     }
 }
 
-// MARK: - Supporting Views (unchanged from original)
+// MARK: - onChange Handlers Modifier
 
-struct PinView: View {
-    let isVisited: Bool
-    let isHighlighted: Bool
-    let distance: String?
-    let onTap: () -> Void
+private struct DiscoverOnChangeModifier: ViewModifier {
+    @ObservedObject var viewModel: DiscoverViewModel
+    @ObservedObject var toastManager: ToastManager
+    @ObservedObject var locationManager: LocationManager
+    @Binding var selectedPinId: String?
+    @Binding var hasInitializedLocation: Bool
+    @Binding var region: MKCoordinateRegion
+    @Binding var mapPosition: MapCameraPosition
+    let updateVisiblePins: () -> Void
+    let scheduleVisiblePinUpdate: () -> Void
     
-    private var pinGradient: LinearGradient {
-        if isVisited {
-            return LinearGradient(
-                colors: [Color(red: 1.0, green: 0.4, blue: 0.4), Color(red: 0.95, green: 0.3, blue: 0.35)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        } else {
-            return LinearGradient(
-                colors: [Color(red: 1.0, green: 0.5, blue: 0.3), Color(red: 1.0, green: 0.4, blue: 0.2)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        }
+    func body(content: Content) -> some View {
+        content
+            .modifier(PlaceInfoChangeModifier(viewModel: viewModel, selectedPinId: $selectedPinId))
+            .modifier(SearchResultsChangeModifier(viewModel: viewModel, scheduleUpdate: scheduleVisiblePinUpdate))
+            .modifier(PanChangeModifier(viewModel: viewModel, region: $region, mapPosition: $mapPosition, updateVisiblePins: updateVisiblePins))
+            .modifier(ToastChangeModifier(viewModel: viewModel, toastManager: toastManager))
+            .modifier(LocationChangeModifier(
+                locationManager: locationManager,
+                viewModel: viewModel,
+                hasInitializedLocation: $hasInitializedLocation,
+                region: $region,
+                mapPosition: $mapPosition,
+                updateVisiblePins: updateVisiblePins
+            ))
     }
+}
+
+// Split into individual modifiers to reduce type complexity
+private struct PlaceInfoChangeModifier: ViewModifier {
+    @ObservedObject var viewModel: DiscoverViewModel
+    @Binding var selectedPinId: String?
     
-    var body: some View {
-        // ✅ RESTORED: Teardrop design for highlighted pins
-        let pinSize = CGSize(width: 34, height: 50)
-        
-        if isHighlighted {
-            VStack(spacing: 2) {
-                // Teardrop pin
-                Image(uiImage: isVisited ?
-                      PinImageProvider.original(size: pinSize) :
-                      PinImageProvider.nonVisited(size: pinSize))
-                    .resizable()
-                    .frame(width: pinSize.width, height: pinSize.height)
-                    .shadow(color: .black.opacity(0.32), radius: 8, x: 0, y: 6)
-                
-                // Distance badge
-                if let distance = distance {
-                    Text(distance)
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.black.opacity(0.7))
-                        .cornerRadius(4)
-                }
-            }
-            .offset(y: -4)
-        } else {
-            // Regular circle pin (non-selected)
-            Button(action: onTap) {
-                ZStack {
-                    Circle()
-                        .fill(pinGradient)
-                        .frame(width: 32, height: 32)
-                        .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 2)
-                    
-                    Image(systemName: "fork.knife")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.white)
-                }
-            }
-            .buttonStyle(PlainButtonStyle())
+    func body(content: Content) -> some View {
+        content.onChange(of: viewModel.showPlaceInfo) { _, isShowing in
+            if !isShowing { selectedPinId = nil }
         }
     }
 }
 
-struct FilterToggleView: View {
-    @Binding var showFollowingOnly: Bool
-    let onToggle: () -> Void
-    @Environment(\.colorScheme) private var colorScheme
+private struct SearchResultsChangeModifier: ViewModifier {
+    @ObservedObject var viewModel: DiscoverViewModel
+    let scheduleUpdate: () -> Void
     
-    var body: some View {
-        HStack(spacing: 0) {
-            Button(action: {
-                if showFollowingOnly {
-                    onToggle()
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: viewModel.searchResults.count) { _, _ in scheduleUpdate() }
+            .onChange(of: viewModel.filteredResults.count) { _, _ in scheduleUpdate() }
+            .onChange(of: viewModel.beenToPlaces.count) { _, _ in scheduleUpdate() }
+    }
+}
+
+private struct PanChangeModifier: ViewModifier {
+    @ObservedObject var viewModel: DiscoverViewModel
+    @Binding var region: MKCoordinateRegion
+    @Binding var mapPosition: MapCameraPosition
+    let updateVisiblePins: () -> Void
+    
+    func body(content: Content) -> some View {
+        content.onChange(of: viewModel.shouldPanToResults) { _, shouldPan in
+            if shouldPan, let newRegion = viewModel.suggestedRegion {
+                withAnimation(.easeInOut(duration: 0.5)) {
+                    region = newRegion
+                    mapPosition = .region(newRegion)
                 }
-            }) {
-                Text("All")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(showFollowingOnly ? .secondary : .white)
-                    .frame(width: 90)
-                    .padding(.vertical, 8)
-                    .background(
-                        Group {
-                            if !showFollowingOnly {
-                                LinearGradient(
-                                    colors: [Color(red: 1.0, green: 0.4, blue: 0.4), Color(red: 0.95, green: 0.3, blue: 0.35)],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                            } else {
-                                Color.clear
-                            }
-                        }
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    viewModel.shouldPanToResults = false
+                    viewModel.suggestedRegion = nil
+                    updateVisiblePins()
+                }
             }
+        }
+    }
+}
+
+private struct ToastChangeModifier: ViewModifier {
+    @ObservedObject var viewModel: DiscoverViewModel
+    @ObservedObject var toastManager: ToastManager
+    
+    func body(content: Content) -> some View {
+        content.onChange(of: viewModel.toastMessage) { _, message in
+            if let message = message {
+                toastManager.showError(message)
+                viewModel.toastMessage = nil
+            }
+        }
+    }
+}
+
+private struct LocationChangeModifier: ViewModifier {
+    @ObservedObject var locationManager: LocationManager
+    @ObservedObject var viewModel: DiscoverViewModel
+    @Binding var hasInitializedLocation: Bool
+    @Binding var region: MKCoordinateRegion
+    @Binding var mapPosition: MapCameraPosition
+    let updateVisiblePins: () -> Void
+    
+    // Use latitude as equatable proxy for location changes
+    private var locationLatitude: Double? {
+        locationManager.userLocation?.latitude
+    }
+    
+    func body(content: Content) -> some View {
+        content.onChange(of: locationLatitude) { _, newLat in
+            guard !hasInitializedLocation,
+                  let location = locationManager.userLocation else { return }
             
-            Button(action: {
-                if !showFollowingOnly {
-                    onToggle()
+            hasInitializedLocation = true
+            let newRegion = MKCoordinateRegion(
+                center: location,
+                span: MKCoordinateSpan(latitudeDelta: 0.02, longitudeDelta: 0.02)
+            )
+            region = newRegion
+            mapPosition = .region(newRegion)
+            print("📍 [Discover] Centered via onChange")
+            
+            // ✅ Fetch places after centering
+            Task {
+                await viewModel.fetchBeenToPlaces(in: newRegion)
+                await MainActor.run {
+                    updateVisiblePins()
                 }
-            }) {
-                Text("Following")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(showFollowingOnly ? .white : .secondary)
-                    .frame(width: 90)
-                    .padding(.vertical, 8)
-                    .background(
-                        Group {
-                            if showFollowingOnly {
-                                LinearGradient(
-                                    colors: [Color(red: 1.0, green: 0.4, blue: 0.4), Color(red: 0.95, green: 0.3, blue: 0.35)],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                            } else {
-                                Color.clear
-                            }
-                        }
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
             }
         }
-        .padding(4)
-        .background(colorScheme == .dark ? Color(.systemGray6) : Color(.systemBackground))
-        .cornerRadius(12)
-        .shadow(color: .black.opacity(colorScheme == .dark ? 0.3 : 0.1), radius: 8, x: 0, y: 2)
     }
 }
 
-struct PinAnnotation: Identifiable {
-    let id: String
-    let coordinate: CLLocationCoordinate2D
-    let isVisited: Bool
-    let place: Place?
-    let searchResult: PlaceSearchResult?
-}
+// MARK: - Search Bar with Filter Button
 
-struct SearchBarView: View {
+private struct SearchBarWithFilter: View {
     @Binding var text: String
     let isSearching: Bool
+    let isFilterActive: Bool
     let onClear: () -> Void
     let onSearch: () -> Void
+    let onFilter: () -> Void
     @Environment(\.colorScheme) private var colorScheme
-    @State private var showFilterSheet = false
+    
+    private let coralColor = Color(red: 1.0, green: 0.4, blue: 0.4)
     
     var body: some View {
         HStack(spacing: 10) {
@@ -990,64 +906,56 @@ struct SearchBarView: View {
             
             TextField("Search places...", text: $text)
                 .font(.system(size: 15))
-                .textFieldStyle(PlainTextFieldStyle())
+                .textFieldStyle(.plain)
                 .autocorrectionDisabled()
-                .onSubmit {
-                    onSearch()
-                }
+                .onSubmit(onSearch)
             
-            if isSearching {
-                ProgressView()
-                    .scaleEffect(0.8)
-            } else if !text.isEmpty {
-                Button(action: onClear) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 16))
-                        .foregroundColor(.secondary)
-                }
-                
-                Button(action: onSearch) {
-                    Image(systemName: "magnifyingglass.circle.fill")
-                        .font(.system(size: 20))
-                        .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
-                }
-                
-                Button(action: {
-                    showFilterSheet = true
-                }) {
-                    Image(systemName: "line.3.horizontal.decrease.circle.fill")
-                        .font(.system(size: 20))
-                        .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
-                }
-            }
+            trailingButtons
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-        .background(colorScheme == .dark ? Color(.systemGray6) : Color.white)
+        .background(colorScheme == .dark ? Color(.systemGray6) : .white)
         .cornerRadius(20)
-        .shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)
-        .sheet(isPresented: $showFilterSheet) {
-            Text("Filter options coming soon")
-                .presentationDetents([.medium])
+        .shadow(color: .black.opacity(0.1), radius: 4, y: 2)
+    }
+    
+    @ViewBuilder
+    private var trailingButtons: some View {
+        if isSearching {
+            ProgressView()
+                .scaleEffect(0.8)
+        } else if !text.isEmpty {
+            Button(action: onClear) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 16))
+                    .foregroundColor(.secondary)
+            }
+            
+            Button(action: onSearch) {
+                Image(systemName: "magnifyingglass.circle.fill")
+                    .font(.system(size: 20))
+                    .foregroundColor(coralColor)
+            }
+            
+            filterButton
         }
     }
-}
-
-struct ErrorBanner: View {
-    let message: String
     
-    var body: some View {
-        HStack {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundColor(.white)
-            Text(message)
-                .font(.system(size: 14, weight: .medium))
-                .foregroundColor(.white)
+    private var filterButton: some View {
+        Button(action: onFilter) {
+            ZStack(alignment: .topTrailing) {
+                Image(systemName: isFilterActive ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                    .font(.system(size: 20))
+                    .foregroundColor(coralColor)
+                
+                if isFilterActive {
+                    Circle()
+                        .fill(coralColor)
+                        .frame(width: 8, height: 8)
+                        .offset(x: 2, y: -2)
+                }
+            }
         }
-        .padding()
-        .background(Color.red)
-        .cornerRadius(12)
-        .shadow(radius: 8)
     }
 }
 

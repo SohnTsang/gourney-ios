@@ -1,5 +1,6 @@
 // Views/Discover/Shared/PlaceDetailComponents.swift
 // ✅ EXACT ORIGINAL DESIGN: No categories, address under rating, distance badge on right
+// ✅ UPDATED: AddressView without mappin icon
 
 import SwiftUI
 
@@ -123,20 +124,76 @@ struct RatingWithDistanceView: View {
     }
 }
 
-// MARK: - Address View (small font, under rating)
+// MARK: - Address View (small font, under rating) - NO ICON
 
 struct AddressView: View {
     let address: String
     
     var body: some View {
-        HStack(spacing: 4) {
-            Image(systemName: "mappin.circle.fill")
-                .font(.system(size: 12))
-                .foregroundColor(.secondary)
-            Text(address)
-                .font(.system(size: 13, weight: .regular))
-                .foregroundColor(.gray)
-                .lineLimit(2)
+        // ✅ REMOVED: mappin.circle.fill icon - just plain text now
+        Text(address)
+            .font(.system(size: 13, weight: .regular))
+            .foregroundColor(.gray)
+            .lineLimit(2)
+    }
+}
+
+// MARK: - Address Button (styled like Phone/Website buttons - copies address)
+
+struct AddressButton: View {
+    let address: String
+    let placeName: String
+    
+    @State private var showCopied = false
+    
+    var body: some View {
+        Button {
+            copyAddress()
+        } label: {
+            HStack(spacing: 10) {
+                Circle()
+                    .strokeBorder(Color(red: 1.0, green: 0.4, blue: 0.4), lineWidth: 2)
+                    .frame(width: 32, height: 32)
+                    .overlay {
+                        Image(systemName: "mappin")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
+                    }
+                
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Address")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.secondary)
+                    Text(address)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(.primary)
+                        .lineLimit(2)
+                }
+                
+                Spacer()
+                
+                // ✅ Show checkmark when copied, otherwise copy icon
+                Image(systemName: showCopied ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(showCopied ? .green : .secondary)
+            }
+            .padding(.vertical, 8)
+        }
+    }
+    
+    private func copyAddress() {
+        UIPasteboard.general.string = address
+        
+        // Show feedback
+        withAnimation {
+            showCopied = true
+        }
+        
+        // Reset after 2 seconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            withAnimation {
+                showCopied = false
+            }
         }
     }
 }

@@ -1,8 +1,23 @@
 // Views/Components/PlaceDetailSheet.swift
 // ✅ FIXED: Always prioritize visit rating from DB
+// ✅ UPDATED: Square photos with rating overlay, no directions button
 
 import SwiftUI
 import CoreLocation
+
+// MARK: - Photo with Rating (for grid display)
+
+struct VisitPhotoData: Identifiable {
+    let id: String
+    let photoUrl: String
+    let rating: Int?
+    
+    init(photoUrl: String, rating: Int?, index: Int) {
+        self.id = "\(photoUrl)-\(index)"
+        self.photoUrl = photoUrl
+        self.rating = rating
+    }
+}
 
 struct PlaceDetailSheet: View {
     let placeId: String
@@ -31,9 +46,10 @@ struct PlaceDetailSheet: View {
     @State private var placePhone: String? = nil
     @State private var placeWebsite: String? = nil
     @State private var placeName: String? = nil
-    @State private var cachedPhotoUrls: [String]? = nil
+    @State private var cachedVisitPhotos: [VisitPhotoData] = []  // ✅ Changed to include ratings
     @State private var openNow: Bool? = nil
     @State private var openingHours: [String]? = nil
+    @State private var showAllVisits = false  // ✅ For navigation to all visits
     
     var body: some View {
         ZStack {
@@ -57,15 +73,27 @@ struct PlaceDetailSheet: View {
                                     rating: avgRating,
                                     distance: calculateDistance()
                                 )
-                                .padding(.bottom, 4)
+                                .padding(.bottom, 8)  // ✅ More padding under rating
                                 
-                                if let address = placeAddress ?? formattedAddress, !address.isEmpty {
-                                    AddressView(address: address)
-                                        .padding(.bottom, 16)
-                                }
-                                
+                                // ✅ Visit count row with "View All" next to it
                                 HStack(alignment: .center) {
                                     VisitStatusView(visitCount: visitCount, isLoading: false)
+                                    
+                                    // ✅ View All button next to visit count with separator
+                                    if visitCount > 0 {
+                                        Text("·")
+                                            .font(.system(size: 14, weight: .medium))
+                                            .foregroundColor(.secondary)
+                                        
+                                        Button {
+                                            showAllVisits = true
+                                        } label: {
+                                            Text("View All")
+                                                .font(.system(size: 13, weight: .medium))
+                                                .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
+                                        }
+                                    }
+                                    
                                     Spacer()
                                     
                                     if let isOpen = openNow {
@@ -77,8 +105,6 @@ struct PlaceDetailSheet: View {
                                                 .font(.system(size: 13, weight: .medium))
                                                 .foregroundColor(isOpen ? .green : .red)
                                         }
-                                        .padding(.horizontal, 10)
-                                        .padding(.vertical, 4)
                                     }
                                 }
                                 .padding(.bottom, 20)
@@ -86,35 +112,20 @@ struct PlaceDetailSheet: View {
                             .padding(.horizontal, 20)
                             .padding(.top, 16)
                             
-                            if let photos = cachedPhotoUrls, !photos.isEmpty {
+                            // ✅ Photo grid - iPhone ratio with rating overlay
+                            if !cachedVisitPhotos.isEmpty {
                                 ScrollView(.horizontal, showsIndicators: false) {
-                                    HStack(spacing: 8) {
-                                        ForEach(Array(photos.enumerated()), id: \.offset) { index, photoUrl in
-                                            AsyncImage(url: URL(string: photoUrl)) { phase in
-                                                switch phase {
-                                                case .success(let image):
-                                                    image
-                                                        .resizable()
-                                                        .aspectRatio(contentMode: .fill)
-                                                        .frame(width: 160, height: 213)
-                                                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                                                case .failure(_):
-                                                    EmptyView()
-                                                case .empty:
-                                                    ProgressView()
-                                                        .frame(width: 160, height: 213)
-                                                @unknown default:
-                                                    EmptyView()
-                                                }
-                                            }
-                                            .id("\(photoUrl)-\(index)")
+                                    HStack(spacing: 8) {  // ✅ More gap between photos
+                                        ForEach(cachedVisitPhotos) { photoData in
+                                            VisitPhotoGridItem(photoData: photoData)
                                         }
                                     }
                                     .padding(.horizontal, 20)
                                 }
-                                .frame(height: 213)
+                                .frame(height: 213)  // iPhone photo ratio
                                 .padding(.bottom, 20)
                             } else {
+                                // ✅ Empty state - iPhone ratio, with radius
                                 VStack(spacing: 12) {
                                     Image(systemName: "camera.fill")
                                         .font(.system(size: 40))
@@ -131,10 +142,23 @@ struct PlaceDetailSheet: View {
                                 .padding(.bottom, 20)
                             }
                             
+                            // ✅ Address section (styled like action buttons)
+                            if let address = placeAddress ?? formattedAddress, !address.isEmpty {
+                                Divider()
+                                    .padding(.horizontal, 20)
+                                    .padding(.bottom, 16)
+                                
+                                AddressButton(
+                                    address: address,
+                                    placeName: placeName ?? displayName
+                                )
+                                .padding(.horizontal, 20)
+                            }
+                            
                             if let hours = openingHours, !hours.isEmpty {
                                 Divider()
                                     .padding(.horizontal, 20)
-                                    .padding(.bottom, 20)
+                                    .padding(.vertical, 12)
                                 
                                 VStack(alignment: .leading, spacing: 12) {
                                     HStack {
@@ -166,35 +190,25 @@ struct PlaceDetailSheet: View {
                                 .padding(.bottom, 20)
                             }
                             
+                            // ✅ REMOVED: DirectionsButton section
+                            // Only show phone and website buttons
                             VStack(alignment: .leading, spacing: 0) {
-                                Divider()
-                                    .padding(.horizontal, 20)
-                                    .padding(.bottom, 16)
-                                
-                                DirectionsButton(
-                                    placeName: placeName ?? displayName,
-                                    address: placeAddress ?? formattedAddress ?? ""
-                                )
-                                .padding(.horizontal, 20)
-                                
-                                Divider()
-                                    .padding(.horizontal, 20)
-                                    .padding(.vertical, 12)
-                                
                                 if let phone = placePhone ?? phoneNumber, !phone.isEmpty {
-                                    PhoneButton(phone: phone)
-                                        .padding(.horizontal, 20)
                                     Divider()
                                         .padding(.horizontal, 20)
-                                        .padding(.vertical, 12)
+                                        .padding(.bottom, 16)
+                                    
+                                    PhoneButton(phone: phone)
+                                        .padding(.horizontal, 20)
                                 }
                                 
                                 if let web = placeWebsite ?? website, !web.isEmpty {
-                                    WebsiteButton(website: web)
-                                        .padding(.horizontal, 20)
                                     Divider()
                                         .padding(.horizontal, 20)
                                         .padding(.vertical, 12)
+                                    
+                                    WebsiteButton(website: web)
+                                        .padding(.horizontal, 20)
                                 }
                             }
                             
@@ -262,7 +276,7 @@ struct PlaceDetailSheet: View {
         .id(placeId)
         .onChange(of: placeId) { _ in
             isLoading = true
-            cachedPhotoUrls = nil
+            cachedVisitPhotos = []
             visits = []
             avgRating = nil
             placeAddress = nil
@@ -276,7 +290,7 @@ struct PlaceDetailSheet: View {
             await loadAllData()
         }
         .onDisappear {
-            cachedPhotoUrls = nil
+            cachedVisitPhotos = []
             visits = []
             avgRating = nil
             placeAddress = nil
@@ -286,6 +300,12 @@ struct PlaceDetailSheet: View {
             openNow = nil
             openingHours = nil
             MemoryDebugHelper.shared.logMemory(tag: "💾 [PlaceDetail] Memory cleared")
+        }
+        .fullScreenCover(isPresented: $showAllVisits) {
+            PlaceVisitsListView(
+                placeId: placeId,
+                placeName: placeName ?? displayName
+            )
         }
     }
     
@@ -313,8 +333,8 @@ struct PlaceDetailSheet: View {
         if let (fetchedVisits, count) = visitsData {
             visits = fetchedVisits
             visitCount = count
-            cachedPhotoUrls = computeTopVisitPhotos(from: fetchedVisits)
-            print("✅ [PlaceDetail] Set visits: \(count), photos: \(cachedPhotoUrls?.count ?? 0)")
+            cachedVisitPhotos = computeTopVisitPhotos(from: fetchedVisits)  // ✅ Now returns with ratings
+            print("✅ [PlaceDetail] Set visits: \(count), photos: \(cachedVisitPhotos.count)")
         }
         
         let isStub = displayName == "Unknown Place" || displayName.isEmpty
@@ -397,11 +417,29 @@ struct PlaceDetailSheet: View {
         }
     }
     
-    private func computeTopVisitPhotos(from visits: [EdgeFunctionVisit]) -> [String] {
-        let visitsWithPhotos = visits.filter { !$0.photoUrls.isEmpty }
-        let sortedVisits = visitsWithPhotos.sorted { ($0.likesCount ?? 0) > ($1.likesCount ?? 0) }
-        let topVisits = Array(sortedVisits.prefix(10))
-        return topVisits.compactMap { $0.photoUrls.first }
+    // ✅ UPDATED: Returns photo data WITH ratings
+    private func computeTopVisitPhotos(from visits: [EdgeFunctionVisit]) -> [VisitPhotoData] {
+        var photoDataList: [VisitPhotoData] = []
+        var index = 0
+        
+        // Sort visits by likes count (most popular first)
+        let sortedVisits = visits
+            .filter { !$0.photoUrls.isEmpty }
+            .sorted { ($0.likesCount ?? 0) > ($1.likesCount ?? 0) }
+        
+        // Take first photo from each visit (up to 10)
+        for visit in sortedVisits.prefix(10) {
+            if let firstPhoto = visit.photoUrls.first {
+                photoDataList.append(VisitPhotoData(
+                    photoUrl: firstPhoto,
+                    rating: visit.rating,
+                    index: index
+                ))
+                index += 1
+            }
+        }
+        
+        return photoDataList
     }
     
     private func calculateDistance() -> String? {
@@ -523,5 +561,352 @@ struct PlaceDetailSheet: View {
             openNow: placeDetail.openNow,
             openingHours: placeDetail.openingHours
         )
+    }
+}
+
+// MARK: - Visit Photo Grid Item (Square with Rating Overlay)
+
+struct VisitPhotoGridItem: View {
+    let photoData: VisitPhotoData
+    
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            // ✅ iPhone photo ratio (160x213), with corner radius
+            AsyncImage(url: URL(string: photoData.photoUrl)) { phase in
+                switch phase {
+                case .success(let image):
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 160, height: 213)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                case .failure(_):
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color(.systemGray5))
+                        .frame(width: 160, height: 213)
+                case .empty:
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color(.systemGray5))
+                        .frame(width: 160, height: 213)
+                        .overlay {
+                            ProgressView()
+                        }
+                @unknown default:
+                    EmptyView()
+                }
+            }
+            
+            // ✅ Rating overlay at bottom left
+            if let rating = photoData.rating, rating > 0 {
+                HStack(spacing: 2) {
+                    ForEach(0..<5) { index in
+                        Image(systemName: index < rating ? "star.fill" : "star")
+                            .font(.system(size: 8))
+                            .foregroundColor(index < rating ? .yellow : .white.opacity(0.5))
+                    }
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
+                .background(Color.black.opacity(0.5))
+                .cornerRadius(4)
+                .padding(8)
+            }
+        }
+        .frame(width: 160, height: 213)
+    }
+}
+
+// MARK: - Place Visits List View (for "View All")
+
+struct PlaceVisitsListView: View {
+    let placeId: String
+    let placeName: String
+    
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
+    
+    @State private var visits: [VisitRowData] = []
+    @State private var isLoading = true
+    @State private var isLoadingMore = false
+    @State private var error: String?
+    @State private var hasMore = true
+    @State private var nextCursor: String?
+    
+    // Navigation states (push from right like FollowersFollowingListView)
+    @State private var selectedProfileUserId: String?
+    @State private var selectedVisitForDetail: FeedItem?
+    
+    private let pageSize = 20
+    
+    private var backgroundColor: Color {
+        colorScheme == .dark ? Color.black : Color.white
+    }
+    
+    var body: some View {
+        NavigationStack {
+            ZStack(alignment: .top) {
+                backgroundColor.ignoresSafeArea()
+                
+                VStack(spacing: 0) {
+                    // Spacer for top bar
+                    Color.clear.frame(height: 52)
+                    
+                    // Content
+                    if isLoading && visits.isEmpty {
+                        Spacer()
+                        LoadingSpinner()
+                        Spacer()
+                    } else if let errorMessage = error, visits.isEmpty {
+                        Spacer()
+                        errorView(errorMessage)
+                        Spacer()
+                    } else if visits.isEmpty {
+                        Spacer()
+                        emptyStateView
+                        Spacer()
+                    } else {
+                        visitsScrollView
+                    }
+                }
+                
+                // Fixed Top Bar using DetailTopBar
+                topBar
+            }
+            .navigationBarHidden(true)
+            // Push ProfileView (slide from right like FollowersFollowingListView)
+            .navigationDestination(item: $selectedProfileUserId) { userId in
+                ProfileView(userId: userId)
+            }
+            // Push FeedDetailView (slide from right)
+            .navigationDestination(item: $selectedVisitForDetail) { feedItem in
+                FeedDetailView(feedItem: feedItem, feedViewModel: nil)
+            }
+        }
+        .task {
+            await loadVisits(refresh: true)
+        }
+    }
+    
+    // MARK: - Top Bar (using DetailTopBar like other detail views)
+    
+    private var topBar: some View {
+        DetailTopBar(
+            title: placeName,
+            onBack: { dismiss() }
+        )
+        .background(backgroundColor)
+    }
+    
+    // MARK: - Visits Scroll View
+    
+    private var visitsScrollView: some View {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                ForEach($visits) { $visit in
+                    // ✅ Capture values explicitly to avoid crash from binding invalidation
+                    let userId = visit.visitorId
+                    let visitCopy = visit
+                    
+                    VStack(spacing: 0) {
+                        VisitRowView(
+                            visit: $visit,
+                            onAvatarTap: {
+                                handleAvatarTap(userId: userId)
+                            },
+                            onRowTap: {
+                                handleRowTap(visit: visitCopy)
+                            }
+                        )
+                        .onAppear {
+                            // Load more when approaching the end
+                            loadMoreIfNeeded(currentVisit: visit)
+                        }
+                        
+                        // Full width divider
+                        Divider()
+                    }
+                }
+                
+                // Loading more indicator (matches FeedView style)
+                if isLoadingMore {
+                    HStack {
+                        Spacer()
+                        ProgressView().tint(GourneyColors.coral)
+                        Spacer()
+                    }
+                    .padding(.vertical, 20)
+                }
+            }
+            .padding(.bottom, 20)
+        }
+        .refreshable {
+            await loadVisits(refresh: true)
+        }
+    }
+    
+    // MARK: - Empty State
+    
+    private var emptyStateView: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "fork.knife.circle")
+                .font(.system(size: 48))
+                .foregroundColor(GourneyColors.coral.opacity(0.5))
+            
+            Text("No visits yet")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundColor(.secondary)
+            
+            Text("Be the first to share your experience!")
+                .font(.system(size: 14))
+                .foregroundColor(.secondary)
+        }
+    }
+    
+    // MARK: - Error View
+    
+    private func errorView(_ message: String) -> some View {
+        VStack(spacing: 16) {
+            Image(systemName: "exclamationmark.circle")
+                .font(.system(size: 48))
+                .foregroundColor(GourneyColors.coral.opacity(0.5))
+            
+            Text(message)
+                .font(.system(size: 16))
+                .foregroundColor(.secondary)
+            
+            Button {
+                Task { await loadVisits(refresh: true) }
+            } label: {
+                Text("Try Again")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 10)
+                    .background(GourneyColors.coral)
+                    .cornerRadius(8)
+            }
+        }
+    }
+    
+    // MARK: - Actions
+    
+    private func handleAvatarTap(userId: String) {
+        // Always push ProfileView (slide from right) - even for own profile
+        selectedProfileUserId = userId
+    }
+    
+    private func handleRowTap(visit: VisitRowData) {
+        // Convert to FeedItem and push FeedDetailView (slide from right)
+        selectedVisitForDetail = visit.toFeedItem()
+    }
+    
+    // MARK: - Load More If Needed (pagination trigger)
+    
+    private func loadMoreIfNeeded(currentVisit: VisitRowData) {
+        // Trigger load more when we're 3 items from the end
+        guard let index = visits.firstIndex(where: { $0.id == currentVisit.id }) else { return }
+        
+        if index >= visits.count - 3 && hasMore && !isLoadingMore {
+            Task {
+                await loadVisits(refresh: false)
+            }
+        }
+    }
+    
+    // MARK: - Load Data (with pagination)
+    
+    private func loadVisits(refresh: Bool) async {
+        if refresh {
+            isLoading = visits.isEmpty
+            nextCursor = nil
+            hasMore = true
+        } else {
+            guard hasMore && !isLoadingMore else { return }
+            isLoadingMore = true
+        }
+        
+        error = nil
+        
+        do {
+            var url = "\(Config.supabaseURL)/functions/v1/places-get-visits/\(placeId)?limit=\(pageSize)&friends_only=false"
+            if let cursor = nextCursor, !refresh {
+                if let encoded = cursor.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
+                    url += "&cursor=\(encoded)"
+                }
+            }
+            
+            guard let requestURL = URL(string: url) else {
+                await MainActor.run {
+                    error = "Invalid URL"
+                    isLoading = false
+                    isLoadingMore = false
+                }
+                return
+            }
+            
+            var request = URLRequest(url: requestURL)
+            request.httpMethod = "GET"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue(Config.supabaseAnonKey, forHTTPHeaderField: "apikey")
+            request.setValue("v1", forHTTPHeaderField: "X-API-Version")
+            
+            if let token = SupabaseClient.shared.getAuthToken() {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+            
+            let (data, response) = try await URLSession.shared.data(for: request)
+            
+            guard let httpResponse = response as? HTTPURLResponse else {
+                await MainActor.run {
+                    error = "Invalid response"
+                    isLoading = false
+                    isLoadingMore = false
+                }
+                return
+            }
+            
+            guard httpResponse.statusCode == 200 else {
+                await MainActor.run {
+                    error = "Server error (\(httpResponse.statusCode))"
+                    isLoading = false
+                    isLoadingMore = false
+                }
+                return
+            }
+            
+            let decoder = JSONDecoder()
+            let result = try decoder.decode(PlaceVisitsResponse.self, from: data)
+            
+            await MainActor.run {
+                // Convert EdgeFunctionVisit to VisitRowData
+                let newVisits = result.visits.map { visit in
+                    VisitRowData(from: visit, placeId: placeId, placeName: placeName)
+                }
+                
+                if refresh {
+                    visits = newVisits
+                } else {
+                    // Append without duplicates
+                    let existingIds = Set(visits.map { $0.id })
+                    let uniqueNewVisits = newVisits.filter { !existingIds.contains($0.id) }
+                    visits.append(contentsOf: uniqueNewVisits)
+                }
+                
+                nextCursor = result.nextCursor
+                hasMore = result.nextCursor != nil
+                isLoading = false
+                isLoadingMore = false
+                
+                print("📸 [PlaceVisits] Loaded \(newVisits.count) visits, total: \(visits.count), hasMore: \(hasMore)")
+            }
+            
+        } catch {
+            print("❌ [PlaceVisitsList] Error: \(error)")
+            await MainActor.run {
+                self.error = "Failed to load visits"
+                isLoading = false
+                isLoadingMore = false
+            }
+        }
     }
 }
