@@ -87,6 +87,15 @@ struct DiscoverView: View {
             Text("Please enable location access to see nearby places")
         }
         .task { await initialLoad() }
+        .onAppear {
+            // ✅ Re-entering view: search at current region
+            if hasInitializedLocation {
+                Task {
+                    await viewModel.fetchBeenToPlaces(in: region)
+                    updateVisiblePins()
+                }
+            }
+        }
         .onDisappear { cleanup() }
     }
     

@@ -1,6 +1,7 @@
 // Views/Lists/ListDetailView.swift
 // ✅ Using native List + swipeActions for Spotify-style smooth scrolling and swipe-to-delete
 // ✅ FIX: Proper callbacks for list updates and deletion to sync with parent view
+// ✅ FIX: Notification handling for live sync with SaveToListSheet
 
 import SwiftUI
 import PhotosUI
@@ -8,8 +9,8 @@ import Combine
 
 struct ListDetailView: View {
     @State var list: RestaurantList
-    let onListUpdated: ((RestaurantList) -> Void)?  // ✅ Changed: Pass full updated list
-    let onListDeleted: ((String) -> Void)?           // ✅ NEW: Deletion callback
+    let onListUpdated: ((RestaurantList) -> Void)?
+    let onListDeleted: ((String) -> Void)?
     let isReadOnly: Bool
     let ownerHandle: String?
     
@@ -172,6 +173,9 @@ struct ListDetailView: View {
             .refreshable {
                 await viewModel.loadPlaces(listId: list.id)
             }
+            .onReceive(NotificationCenter.default.publisher(for: .listItemsDidChange)) { notification in
+                handleListItemsChanged(notification)
+            }
             .overlay {
                 if viewModel.isLoading && viewModel.places.isEmpty {
                     ProgressView()
@@ -183,6 +187,10 @@ struct ListDetailView: View {
         .navigationBarHidden(true)
         .task {
             await viewModel.loadPlaces(listId: list.id)
+        }
+        // ✅ NEW: Listen for list item changes from SaveToListSheet
+        .onReceive(NotificationCenter.default.publisher(for: .listItemsDidChange)) { notification in
+            handleListItemsChanged(notification)
         }
         .sheet(isPresented: $showAddPlace) {
             AddPlaceToListSheet(listId: list.id, viewModel: viewModel)
@@ -268,6 +276,48 @@ struct ListDetailView: View {
         }
     }
     
+    // ✅ NEW: Handle list item changes notification
+    private func handleListItemsChanged(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let listId = userInfo["listId"] as? String,
+              listId == list.id else { return }
+        
+        // Reload places when items added/removed from this specific list
+        Task {
+            await viewModel.loadPlaces(listId: list.id)
+            
+            // Update local list item count
+            if let action = userInfo["action"] as? String {
+                let currentCount = list.itemCount ?? 0
+                let newCount: Int
+                if action == "add" {
+                    newCount = currentCount + 1
+                } else if action == "remove" {
+                    newCount = max(0, currentCount - 1)
+                } else {
+                    return
+                }
+                
+                // Update local list
+                list = RestaurantList(
+                    id: list.id,
+                    title: list.title,
+                    description: list.description,
+                    visibility: list.visibility,
+                    itemCount: newCount,
+                    coverPhotoUrl: list.coverPhotoUrl,
+                    createdAt: list.createdAt,
+                    likesCount: list.likesCount,
+                    viewCount: list.viewCount
+                )
+                
+                // Notify parent of update
+                onListUpdated?(list)
+                print("📝 [ListDetailView] Updated list count: \(newCount)")
+            }
+        }
+    }
+    
     // MARK: - Stats Row
     
     private var statsRow: some View {
@@ -336,6 +386,13 @@ struct ListDetailView: View {
                     // ✅ Update local list and notify parent
                     list.itemCount = newCount
                     onListUpdated?(list)
+                    
+                    // ✅ Post notification for other views
+                    NotificationCenter.default.post(
+                        name: .listItemsDidChange,
+                        object: nil,
+                        userInfo: ["listId": list.id, "action": "remove", "placeId": placeId]
+                    )
                 }
             )
         }

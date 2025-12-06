@@ -1,6 +1,7 @@
 // Views/Components/PlaceDetailSheet.swift
-// ✅ FIXED: Always prioritize visit rating from DB
-// ✅ UPDATED: Square photos with rating overlay, no directions button
+// ✅ FIX 1: Address left-aligned (not centered)
+// ✅ FIX 2: Bottom button gaps reduced (spacing: 8)
+// ✅ FIX 3: SaveToListSheet integration with proper bottom sheet UX
 
 import SwiftUI
 import CoreLocation
@@ -9,13 +10,17 @@ import CoreLocation
 
 struct VisitPhotoData: Identifiable {
     let id: String
+    let visitId: String
     let photoUrl: String
     let rating: Int?
+    let visit: EdgeFunctionVisit
     
-    init(photoUrl: String, rating: Int?, index: Int) {
+    init(photoUrl: String, rating: Int?, index: Int, visitId: String, visit: EdgeFunctionVisit) {
         self.id = "\(photoUrl)-\(index)"
+        self.visitId = visitId
         self.photoUrl = photoUrl
         self.rating = rating
+        self.visit = visit
     }
 }
 
@@ -46,10 +51,17 @@ struct PlaceDetailSheet: View {
     @State private var placePhone: String? = nil
     @State private var placeWebsite: String? = nil
     @State private var placeName: String? = nil
-    @State private var cachedVisitPhotos: [VisitPhotoData] = []  // ✅ Changed to include ratings
+    @State private var cachedVisitPhotos: [VisitPhotoData] = []
     @State private var openNow: Bool? = nil
     @State private var openingHours: [String]? = nil
-    @State private var showAllVisits = false  // ✅ For navigation to all visits
+    @State private var showAllVisits = false
+    
+    // Navigation state for photo tap -> FeedDetailView
+    @State private var selectedPhotoFeedItem: FeedItem?
+    
+    // States for bottom action buttons
+    @State private var showSaveToList = false
+    @State private var showReportSheet = false
     
     var body: some View {
         ZStack {
@@ -73,13 +85,12 @@ struct PlaceDetailSheet: View {
                                     rating: avgRating,
                                     distance: calculateDistance()
                                 )
-                                .padding(.bottom, 8)  // ✅ More padding under rating
+                                .padding(.bottom, 8)
                                 
-                                // ✅ Visit count row with "View All" next to it
+                                // Visit count row with "View All" next to it
                                 HStack(alignment: .center) {
                                     VisitStatusView(visitCount: visitCount, isLoading: false)
                                     
-                                    // ✅ View All button next to visit count with separator
                                     if visitCount > 0 {
                                         Text("·")
                                             .font(.system(size: 14, weight: .medium))
@@ -112,20 +123,23 @@ struct PlaceDetailSheet: View {
                             .padding(.horizontal, 20)
                             .padding(.top, 16)
                             
-                            // ✅ Photo grid - iPhone ratio with rating overlay
+                            // Photo grid - iPhone ratio with rating overlay - NOW TAPPABLE
                             if !cachedVisitPhotos.isEmpty {
                                 ScrollView(.horizontal, showsIndicators: false) {
-                                    HStack(spacing: 8) {  // ✅ More gap between photos
+                                    HStack(spacing: 8) {
                                         ForEach(cachedVisitPhotos) { photoData in
                                             VisitPhotoGridItem(photoData: photoData)
+                                                .onTapGesture {
+                                                    handlePhotoTap(photoData: photoData)
+                                                }
                                         }
                                     }
                                     .padding(.horizontal, 20)
                                 }
-                                .frame(height: 213)  // iPhone photo ratio
+                                .frame(height: 213)
                                 .padding(.bottom, 20)
                             } else {
-                                // ✅ Empty state - iPhone ratio, with radius
+                                // Empty state
                                 VStack(spacing: 12) {
                                     Image(systemName: "camera.fill")
                                         .font(.system(size: 40))
@@ -142,16 +156,18 @@ struct PlaceDetailSheet: View {
                                 .padding(.bottom, 20)
                             }
                             
-                            // ✅ Address section (styled like action buttons)
+                            // ✅ FIX 1: Address section - LEFT ALIGNED
                             if let address = placeAddress ?? formattedAddress, !address.isEmpty {
                                 Divider()
                                     .padding(.horizontal, 20)
                                     .padding(.bottom, 16)
                                 
+                                // Address button with left alignment
                                 AddressButton(
                                     address: address,
                                     placeName: placeName ?? displayName
                                 )
+                                .frame(maxWidth: .infinity, alignment: .leading)  // ✅ Left align
                                 .padding(.horizontal, 20)
                             }
                             
@@ -190,8 +206,7 @@ struct PlaceDetailSheet: View {
                                 .padding(.bottom, 20)
                             }
                             
-                            // ✅ REMOVED: DirectionsButton section
-                            // Only show phone and website buttons
+                            // Phone and website buttons
                             VStack(alignment: .leading, spacing: 0) {
                                 if let phone = placePhone ?? phoneNumber, !phone.isEmpty {
                                     Divider()
@@ -199,6 +214,7 @@ struct PlaceDetailSheet: View {
                                         .padding(.bottom, 16)
                                     
                                     PhoneButton(phone: phone)
+                                        .frame(maxWidth: .infinity, alignment: .leading)  // ✅ Left align
                                         .padding(.horizontal, 20)
                                 }
                                 
@@ -208,6 +224,7 @@ struct PlaceDetailSheet: View {
                                         .padding(.vertical, 12)
                                     
                                     WebsiteButton(website: web)
+                                        .frame(maxWidth: .infinity, alignment: .leading)  // ✅ Left align
                                         .padding(.horizontal, 20)
                                 }
                             }
@@ -216,8 +233,10 @@ struct PlaceDetailSheet: View {
                         }
                     }
                     
+                    // ✅ FIX 2: Bottom action bar - REDUCED SPACING (8 instead of 12)
                     VStack(spacing: 0) {
-                        HStack(spacing: 12) {
+                        HStack(spacing: 8) {  // ← Changed from 12 to 8
+                            // Add Visit button (widest)
                             Button {
                                 primaryButtonAction()
                             } label: {
@@ -236,10 +255,35 @@ struct PlaceDetailSheet: View {
                                     .cornerRadius(12)
                             }
                             
+                            // Save to List button (icon only)
+                            Button {
+                                showSaveToList = true
+                            } label: {
+                                Image(systemName: "bookmark")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundColor(.primary)
+                                    .frame(width: 48, height: 48)
+                                    .background(Color(.systemGray6))
+                                    .cornerRadius(12)
+                            }
+                            
+                            // Share button (icon only)
                             Button {
                                 sharePlace()
                             } label: {
                                 Image(systemName: "square.and.arrow.up")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundColor(.primary)
+                                    .frame(width: 48, height: 48)
+                                    .background(Color(.systemGray6))
+                                    .cornerRadius(12)
+                            }
+                            
+                            // Report button (icon only)
+                            Button {
+                                showReportSheet = true
+                            } label: {
+                                Image(systemName: "flag")
                                     .font(.system(size: 16, weight: .semibold))
                                     .foregroundColor(.primary)
                                     .frame(width: 48, height: 48)
@@ -307,6 +351,59 @@ struct PlaceDetailSheet: View {
                 placeName: placeName ?? displayName
             )
         }
+        // Navigation to FeedDetailView when photo tapped
+        .fullScreenCover(item: $selectedPhotoFeedItem) { feedItem in
+            NavigationStack {
+                FeedDetailView(feedItem: feedItem, feedViewModel: nil)
+            }
+        }
+        // ✅ FIX 3: Save to List sheet - bottom sheet presentation
+        .sheet(isPresented: $showSaveToList) {
+            SaveToListSheet(placeId: placeId, placeName: placeName ?? displayName)
+        }
+        // Report sheet (placeholder)
+        .sheet(isPresented: $showReportSheet) {
+            ReportPlaceSheet(placeId: placeId, placeName: placeName ?? displayName)
+        }
+    }
+    
+    // MARK: - Handle Photo Tap -> FeedDetailView
+    
+    private func handlePhotoTap(photoData: VisitPhotoData) {
+        let feedItem = convertToFeedItem(visit: photoData.visit)
+        selectedPhotoFeedItem = feedItem
+    }
+    
+    private func convertToFeedItem(visit: EdgeFunctionVisit) -> FeedItem {
+        FeedItem(
+            id: visit.id,
+            rating: visit.rating,
+            comment: visit.comment,
+            photoUrls: visit.photoUrls.isEmpty ? nil : visit.photoUrls,
+            visibility: "public",
+            createdAt: visit.visitedAt,
+            visitedAt: visit.visitedAt,
+            likeCount: visit.likesCount ?? 0,
+            commentCount: 0,
+            isLiked: false,
+            isFollowing: false,
+            user: FeedUser(
+                id: visit.userId,
+                handle: visit.userHandle,
+                displayName: visit.userDisplayName,
+                avatarUrl: visit.userAvatarUrl
+            ),
+            place: FeedPlace(
+                id: placeId,
+                nameEn: placeName ?? displayName,
+                nameJa: nil,
+                nameZh: nil,
+                city: nil,
+                ward: nil,
+                country: nil,
+                categories: nil
+            )
+        )
     }
     
     // MARK: - Load All Data
@@ -321,7 +418,6 @@ struct PlaceDetailSheet: View {
         let visitsData = await fetchVisits()
         print("🔍 [PlaceDetail] visitsData: \(visitsData != nil ? "loaded \(visitsData!.visitCount) visits" : "nil")")
         
-        // ✅ ALWAYS fetch DB data first (contains visit avgRating)
         let placeData = try? await fetchPlaceData(placeId: placeId)
         print("🔍 [PlaceDetail] placeData from DB: \(placeData != nil ? "loaded" : "nil")")
         if let placeData = placeData {
@@ -333,7 +429,7 @@ struct PlaceDetailSheet: View {
         if let (fetchedVisits, count) = visitsData {
             visits = fetchedVisits
             visitCount = count
-            cachedVisitPhotos = computeTopVisitPhotos(from: fetchedVisits)  // ✅ Now returns with ratings
+            cachedVisitPhotos = computeTopVisitPhotos(from: fetchedVisits)
             print("✅ [PlaceDetail] Set visits: \(count), photos: \(cachedVisitPhotos.count)")
         }
         
@@ -341,7 +437,6 @@ struct PlaceDetailSheet: View {
         print("🔍 [PlaceDetail] isStub: \(isStub)")
         
         if isStub, let googleId = googlePlaceId {
-            // Fetch Google for name, address, phone, website, hours
             print("🔍 [PlaceDetail] Fetching from Google API...")
             do {
                 let googleData = try await GooglePlaceDetailFetcher.shared.fetchDetails(googlePlaceId: googleId)
@@ -353,7 +448,6 @@ struct PlaceDetailSheet: View {
                 openNow = googleData.openingHours?.openNow
                 openingHours = googleData.openingHours?.weekdayText
                 
-                // ✅ Rating priority: DB avgRating (visits) > Google rating
                 if let dbRating = placeData?.avgRating {
                     avgRating = dbRating
                     print("✅ [PlaceDetail] Using DB visit rating: \(dbRating)")
@@ -365,7 +459,6 @@ struct PlaceDetailSheet: View {
                 print("❌ [PlaceDetail] Google API failed: \(error)")
             }
         } else if let placeData = placeData {
-            // Non-stub: use all DB data
             print("✅ [PlaceDetail] Using DB data (non-stub)")
             avgRating = placeData.avgRating
             placeAddress = placeData.address
@@ -417,23 +510,22 @@ struct PlaceDetailSheet: View {
         }
     }
     
-    // ✅ UPDATED: Returns photo data WITH ratings
     private func computeTopVisitPhotos(from visits: [EdgeFunctionVisit]) -> [VisitPhotoData] {
         var photoDataList: [VisitPhotoData] = []
         var index = 0
         
-        // Sort visits by likes count (most popular first)
         let sortedVisits = visits
             .filter { !$0.photoUrls.isEmpty }
             .sorted { ($0.likesCount ?? 0) > ($1.likesCount ?? 0) }
         
-        // Take first photo from each visit (up to 10)
         for visit in sortedVisits.prefix(10) {
             if let firstPhoto = visit.photoUrls.first {
                 photoDataList.append(VisitPhotoData(
                     photoUrl: firstPhoto,
                     rating: visit.rating,
-                    index: index
+                    index: index,
+                    visitId: visit.id,
+                    visit: visit
                 ))
                 index += 1
             }
@@ -571,7 +663,6 @@ struct VisitPhotoGridItem: View {
     
     var body: some View {
         ZStack(alignment: .bottomLeading) {
-            // ✅ iPhone photo ratio (160x213), with corner radius
             AsyncImage(url: URL(string: photoData.photoUrl)) { phase in
                 switch phase {
                 case .success(let image):
@@ -596,7 +687,6 @@ struct VisitPhotoGridItem: View {
                 }
             }
             
-            // ✅ Rating overlay at bottom left
             if let rating = photoData.rating, rating > 0 {
                 HStack(spacing: 2) {
                     ForEach(0..<5) { index in
@@ -613,6 +703,46 @@ struct VisitPhotoGridItem: View {
             }
         }
         .frame(width: 160, height: 213)
+        .contentShape(Rectangle())
+    }
+}
+
+// MARK: - Report Place Sheet (Placeholder)
+
+struct ReportPlaceSheet: View {
+    let placeId: String
+    let placeName: String
+    @Environment(\.dismiss) var dismiss
+    
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 20) {
+                Image(systemName: "flag.circle")
+                    .font(.system(size: 60))
+                    .foregroundColor(GourneyColors.coral.opacity(0.5))
+                
+                Text("Report \(placeName)")
+                    .font(.system(size: 18, weight: .semibold))
+                    .multilineTextAlignment(.center)
+                
+                Text("Report functionality will be added soon.")
+                    .font(.system(size: 14))
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                
+                Spacer()
+            }
+            .padding(.top, 60)
+            .padding(.horizontal, 20)
+            .navigationTitle("Report")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { dismiss() }
+                        .foregroundColor(GourneyColors.coral)
+                }
+            }
+        }
     }
 }
 
@@ -632,7 +762,6 @@ struct PlaceVisitsListView: View {
     @State private var hasMore = true
     @State private var nextCursor: String?
     
-    // Navigation states (push from right like FollowersFollowingListView)
     @State private var selectedProfileUserId: String?
     @State private var selectedVisitForDetail: FeedItem?
     
@@ -648,10 +777,8 @@ struct PlaceVisitsListView: View {
                 backgroundColor.ignoresSafeArea()
                 
                 VStack(spacing: 0) {
-                    // Spacer for top bar
                     Color.clear.frame(height: 52)
                     
-                    // Content
                     if isLoading && visits.isEmpty {
                         Spacer()
                         LoadingSpinner()
@@ -669,15 +796,12 @@ struct PlaceVisitsListView: View {
                     }
                 }
                 
-                // Fixed Top Bar using DetailTopBar
                 topBar
             }
             .navigationBarHidden(true)
-            // Push ProfileView (slide from right like FollowersFollowingListView)
             .navigationDestination(item: $selectedProfileUserId) { userId in
                 ProfileView(userId: userId)
             }
-            // Push FeedDetailView (slide from right)
             .navigationDestination(item: $selectedVisitForDetail) { feedItem in
                 FeedDetailView(feedItem: feedItem, feedViewModel: nil)
             }
@@ -687,8 +811,6 @@ struct PlaceVisitsListView: View {
         }
     }
     
-    // MARK: - Top Bar (using DetailTopBar like other detail views)
-    
     private var topBar: some View {
         DetailTopBar(
             title: placeName,
@@ -697,13 +819,10 @@ struct PlaceVisitsListView: View {
         .background(backgroundColor)
     }
     
-    // MARK: - Visits Scroll View
-    
     private var visitsScrollView: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
                 ForEach($visits) { $visit in
-                    // ✅ Capture values explicitly to avoid crash from binding invalidation
                     let userId = visit.visitorId
                     let visitCopy = visit
                     
@@ -718,16 +837,13 @@ struct PlaceVisitsListView: View {
                             }
                         )
                         .onAppear {
-                            // Load more when approaching the end
                             loadMoreIfNeeded(currentVisit: visit)
                         }
                         
-                        // Full width divider
                         Divider()
                     }
                 }
                 
-                // Loading more indicator (matches FeedView style)
                 if isLoadingMore {
                     HStack {
                         Spacer()
@@ -744,8 +860,6 @@ struct PlaceVisitsListView: View {
         }
     }
     
-    // MARK: - Empty State
-    
     private var emptyStateView: some View {
         VStack(spacing: 16) {
             Image(systemName: "fork.knife.circle")
@@ -761,8 +875,6 @@ struct PlaceVisitsListView: View {
                 .foregroundColor(.secondary)
         }
     }
-    
-    // MARK: - Error View
     
     private func errorView(_ message: String) -> some View {
         VStack(spacing: 16) {
@@ -788,22 +900,15 @@ struct PlaceVisitsListView: View {
         }
     }
     
-    // MARK: - Actions
-    
     private func handleAvatarTap(userId: String) {
-        // Always push ProfileView (slide from right) - even for own profile
         selectedProfileUserId = userId
     }
     
     private func handleRowTap(visit: VisitRowData) {
-        // Convert to FeedItem and push FeedDetailView (slide from right)
         selectedVisitForDetail = visit.toFeedItem()
     }
     
-    // MARK: - Load More If Needed (pagination trigger)
-    
     private func loadMoreIfNeeded(currentVisit: VisitRowData) {
-        // Trigger load more when we're 3 items from the end
         guard let index = visits.firstIndex(where: { $0.id == currentVisit.id }) else { return }
         
         if index >= visits.count - 3 && hasMore && !isLoadingMore {
@@ -812,8 +917,6 @@ struct PlaceVisitsListView: View {
             }
         }
     }
-    
-    // MARK: - Load Data (with pagination)
     
     private func loadVisits(refresh: Bool) async {
         if refresh {
@@ -878,7 +981,6 @@ struct PlaceVisitsListView: View {
             let result = try decoder.decode(PlaceVisitsResponse.self, from: data)
             
             await MainActor.run {
-                // Convert EdgeFunctionVisit to VisitRowData
                 let newVisits = result.visits.map { visit in
                     VisitRowData(from: visit, placeId: placeId, placeName: placeName)
                 }
@@ -886,7 +988,6 @@ struct PlaceVisitsListView: View {
                 if refresh {
                     visits = newVisits
                 } else {
-                    // Append without duplicates
                     let existingIds = Set(visits.map { $0.id })
                     let uniqueNewVisits = newVisits.filter { !existingIds.contains($0.id) }
                     visits.append(contentsOf: uniqueNewVisits)

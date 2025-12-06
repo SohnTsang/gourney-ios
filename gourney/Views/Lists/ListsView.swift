@@ -147,12 +147,12 @@ struct ListsView: View {
                     GridRow {
                         ProgressView()
                             .tint(GourneyColors.coral)
-                            .gridCellColumns(2)  // ✅ Changed from 3 to 2
+                            .gridCellColumns(2)
                             .padding(.vertical, 20)
                     }
                 }
             }
-            .padding(.horizontal, 12)  // ✅ Add horizontal padding for grid
+            .padding(.horizontal, 12)
             
             // Empty states - only show after initial load completes
             if selectedFilter == .myLists && filteredLists.isEmpty && !viewModel.isLoading && viewModel.hasLoadedMyLists {
@@ -413,6 +413,10 @@ struct ListsView: View {
                 }
             }
         }
+        // ✅ NEW: Listen for list item changes from SaveToListSheet
+        .onReceive(NotificationCenter.default.publisher(for: .listItemsDidChange)) { notification in
+            handleListItemsChanged(notification)
+        }
         .onChange(of: selectedFilter) { _, newFilter in
             Task {
                 switch newFilter {
@@ -429,6 +433,45 @@ struct ListsView: View {
                         await viewModel.loadPopularLists()
                     }
                 }
+            }
+        }
+    }
+    
+    // ✅ NEW: Handle list item changes notification
+    private func handleListItemsChanged(_ notification: Notification) {
+        guard let userInfo = notification.userInfo else { return }
+        
+        // Handle item add/remove
+        if let listId = userInfo["listId"] as? String,
+           let action = userInfo["action"] as? String,
+           action == "add" || action == "remove" {
+            
+            let delta = action == "add" ? 1 : -1
+            
+            // Update in customLists
+            if let index = viewModel.customLists.firstIndex(where: { $0.id == listId }) {
+                let currentCount = viewModel.customLists[index].itemCount ?? 0
+                let newCount = max(0, currentCount + delta)
+                viewModel.updateListItemCount(listId: listId, newCount: newCount)
+                print("📝 [ListsView] Updated \(viewModel.customLists[index].title) count: \(newCount)")
+            }
+            
+            // Update in defaultLists
+            if let index = viewModel.defaultLists.firstIndex(where: { $0.id == listId }) {
+                let currentCount = viewModel.defaultLists[index].itemCount ?? 0
+                let newCount = max(0, currentCount + delta)
+                viewModel.updateListItemCount(listId: listId, newCount: newCount)
+            }
+        }
+        
+        // Handle new list created
+        if let action = userInfo["action"] as? String,
+           action == "listCreated",
+           let newList = userInfo["list"] as? RestaurantList {
+            // Check if already exists to avoid duplicates
+            if !viewModel.customLists.contains(where: { $0.id == newList.id }) {
+                viewModel.customLists.insert(newList, at: 0)
+                print("📝 [ListsView] Added new list: \(newList.title)")
             }
         }
     }
@@ -654,17 +697,9 @@ struct ListGridItem: View {
                 )
             }
         }
-        .aspectRatio(1, contentMode: .fit)  // ✅ Square aspect ratio
-        .clipped()
+        .aspectRatio(1, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 12))
-    }
-    
-    private var placeholderWithLoading: some View {
-        ZStack {
-            Color.gray.opacity(0.15)
-            ProgressView()
-                .tint(GourneyColors.coral.opacity(0.6))
-        }
+        .contentShape(RoundedRectangle(cornerRadius: 12))
     }
     
     private var placeholderWithError: some View {
@@ -678,9 +713,25 @@ struct ListGridItem: View {
                 endPoint: .bottomTrailing
             )
             
-            Image(systemName: "list.bullet.rectangle.portrait")
+            Image(systemName: "photo")
                 .font(.system(size: 32))
                 .foregroundColor(GourneyColors.coral.opacity(0.5))
+        }
+    }
+    
+    private var placeholderWithLoading: some View {
+        ZStack {
+            LinearGradient(
+                colors: [
+                    GourneyColors.coral.opacity(0.2),
+                    GourneyColors.coral.opacity(0.1)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            
+            ProgressView()
+                .tint(GourneyColors.coral.opacity(0.6))
         }
     }
 }
@@ -696,39 +747,66 @@ struct FollowingListGridItem: View {
         GeometryReader { geometry in
             ZStack {
                 // Cover image or placeholder
-                Group {
-                    if let coverUrl = item.coverPhotoUrl, let url = URL(string: coverUrl) {
-                        AsyncImage(url: url) { phase in
-                            switch phase {
-                            case .success(let image):
-                                image
-                                    .resizable()
-                                    .scaledToFill()
-                                    .frame(width: geometry.size.width, height: geometry.size.height)
-                                    .clipped()
-                            case .failure, .empty:
+                if let coverUrl = item.coverPhotoUrl, let url = URL(string: coverUrl) {
+                    AsyncImage(url: url) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: geometry.size.width, height: geometry.size.height)
+                                .clipped()
+                                .transition(.opacity.animation(.easeInOut(duration: 0.3)))
+                        case .failure(_):
+                            placeholderView
+                        case .empty:
+                            ZStack {
                                 placeholderView
-                            @unknown default:
-                                placeholderView
+                                ProgressView()
+                                    .tint(GourneyColors.coral.opacity(0.6))
                             }
+                        @unknown default:
+                            placeholderView
                         }
-                    } else {
-                        placeholderView
                     }
+                } else {
+                    placeholderView
                 }
                 
-                // Title + stats overlay
+                // Info overlay
                 VStack(alignment: .leading, spacing: 4) {
                     Spacer()
+                    
+                    // User info row
+                    HStack(spacing: 6) {
+                        if let avatarUrl = item.userAvatarUrl, let url = URL(string: avatarUrl) {
+                            AsyncImage(url: url) { image in
+                                image.resizable().scaledToFill()
+                            } placeholder: {
+                                Circle().fill(Color(.systemGray4))
+                            }
+                            .frame(width: 18, height: 18)
+                            .clipShape(Circle())
+                        } else {
+                            Circle()
+                                .fill(Color(.systemGray4))
+                                .frame(width: 18, height: 18)
+                        }
+                        
+                        Text("@\(item.userHandle)")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(.white.opacity(0.9))
+                            .lineLimit(1)
+                    }
                     
                     Text(item.title)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundColor(.white)
                         .lineLimit(2)
+                        .multilineTextAlignment(.leading)
                     
-                    // ✅ Bottom row: place count (left) and like count (right) - same as My Lists
+                    // Stats row
                     HStack {
-                        // Place count with icon
                         HStack(spacing: 3) {
                             Image(systemName: "mappin.circle.fill")
                                 .font(.system(size: 10))
@@ -739,14 +817,15 @@ struct FollowingListGridItem: View {
                         
                         Spacer()
                         
-                        // Like count (bottom right)
-                        HStack(spacing: 3) {
-                            Image(systemName: "heart.fill")
-                                .font(.system(size: 10))
-                            Text("\(item.likesCount ?? 0)")
-                                .font(.system(size: 11, weight: .medium))
+                        if let likes = item.likesCount, likes > 0 {
+                            HStack(spacing: 3) {
+                                Image(systemName: "heart.fill")
+                                    .font(.system(size: 10))
+                                Text("\(likes)")
+                                    .font(.system(size: 11, weight: .medium))
+                            }
+                            .foregroundColor(.white.opacity(0.9))
                         }
-                        .foregroundColor(.white.opacity(0.9))
                     }
                 }
                 .padding(8)
@@ -856,11 +935,11 @@ struct PopularListGridItem: View {
                     )
                 )
             }
-            .aspectRatio(1, contentMode: .fit)  // ✅ Square aspect ratio
+            .aspectRatio(1, contentMode: .fit)
             .clipShape(RoundedRectangle(cornerRadius: 12))
-            .contentShape(RoundedRectangle(cornerRadius: 12))  // ✅ Fix tap area
+            .contentShape(RoundedRectangle(cornerRadius: 12))
         }
-        .buttonStyle(PlainButtonStyle())
+        .buttonStyle(.plain)
     }
 }
 

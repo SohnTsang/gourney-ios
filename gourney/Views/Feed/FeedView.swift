@@ -10,8 +10,7 @@ struct FeedView: View {
     @StateObject private var viewModel = FeedViewModel()
     @ObservedObject private var navigator = NavigationCoordinator.shared
     @State private var showSearch = false
-    @State private var showSaveToList = false
-    @State private var selectedItem: FeedItem?
+    @State private var selectedItemForSave: FeedItem?  // ✅ Renamed for clarity
     @State private var selectedPlaceItem: FeedItem?
     @State private var showAddVisitFromPlace = false
     @State private var placeForAddVisit: FeedItem?
@@ -113,8 +112,8 @@ struct FeedView: View {
                         selectedPlaceItem = item
                     },
                     onSaveToList: {
-                        selectedItem = item
-                        showSaveToList = true
+                        // ✅ Just set the item - sheet(item:) handles presentation
+                        selectedItemForSave = item
                     },
                     onReport: { },
                     onEdit: {
@@ -127,10 +126,9 @@ struct FeedView: View {
                 )
             }
         }
-        .sheet(isPresented: $showSaveToList) {
-            if let item = selectedItem {
-                SaveToListSheet(placeId: item.place.id, placeName: item.place.displayName)
-            }
+        // ✅ Use sheet(item:) pattern - guarantees item is non-nil when sheet opens
+        .sheet(item: $selectedItemForSave) { item in
+            SaveToListSheet(placeId: item.place.id, placeName: item.place.displayName)
         }
         .sheet(item: $selectedPlaceItem) { item in
             PlaceDetailSheet(
@@ -295,8 +293,8 @@ struct FeedView: View {
                         onLikeTap: { viewModel.toggleLike(for: item) },
                         onCommentTap: { navigateToDetail = item },
                         onSaveTap: {
-                            selectedItem = item
-                            showSaveToList = true
+                            // ✅ Just set the item - sheet(item:) handles presentation
+                            selectedItemForSave = item
                         },
                         onShareTap: { shareItem(item) },
                         onPlaceTap: {
@@ -356,28 +354,6 @@ struct FeedView: View {
         if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
            let rootVC = windowScene.windows.first?.rootViewController {
             rootVC.present(activityVC, animated: true)
-        }
-    }
-}
-
-// MARK: - Save To List Sheet
-
-struct SaveToListSheet: View {
-    let placeId: String
-    let placeName: String
-    @Environment(\.dismiss) var dismiss
-    
-    var body: some View {
-        NavigationStack {
-            Text("Save \(placeName) to list")
-                .navigationTitle("Save to List")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Close") { dismiss() }
-                            .foregroundColor(GourneyColors.coral)
-                    }
-                }
         }
     }
 }

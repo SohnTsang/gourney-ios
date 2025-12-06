@@ -44,6 +44,16 @@
         }
       }
     },
+    "%lld place%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld place%2$@"
+          }
+        }
+      }
+    },
     "%lld points" : {
 
     },
@@ -69,9 +79,6 @@
           }
         }
       }
-    },
-    "%lld/50" : {
-
     },
     "%lld/150" : {
 
@@ -1206,7 +1213,13 @@
     "Create List" : {
 
     },
+    "Create New List" : {
+
+    },
     "Create your first list to organize restaurants" : {
+
+    },
+    "Create your first list to start saving places" : {
 
     },
     "Delete" : {
@@ -1612,6 +1625,9 @@
           }
         }
       }
+    },
+    "Failed to create list" : {
+
     },
     "Failed to load" : {
 
@@ -2400,6 +2416,9 @@
     "Loading visits..." : {
 
     },
+    "Loading your lists..." : {
+
+    },
     "Location" : {
 
     },
@@ -2527,6 +2546,9 @@
 
     },
     "No lists match your filters" : {
+
+    },
+    "No lists yet" : {
 
     },
     "No Lists Yet" : {
@@ -3172,6 +3194,15 @@
     "Recent" : {
 
     },
+    "Report" : {
+
+    },
+    "Report %@" : {
+
+    },
+    "Report functionality will be added soon." : {
+
+    },
     "Required" : {
 
     },
@@ -3179,9 +3210,6 @@
 
     },
     "Save" : {
-
-    },
-    "Save %@ to list" : {
 
     },
     "Save places from discover or feed\nto add them to this list" : {
