@@ -6,6 +6,7 @@
 // FIX: Comment input now shows current user's avatar
 // Avatar taps now navigate via NavigationCoordinator
 // ✅ UPDATE: feedViewModel is now optional to support navigation from PlaceVisitsListView
+// ✅ UPDATE: Added save (bookmark) functionality
 
 import SwiftUI
 
@@ -35,6 +36,7 @@ struct FeedDetailView: View {
     // Local like state (since ProfileVisit doesn't track likes)
     @State private var localIsLiked: Bool = false
     @State private var localLikeCount: Int = 0
+    @State private var localIsSaved: Bool = false  // ✅ NEW: Bookmark state
     
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
@@ -51,6 +53,7 @@ struct FeedDetailView: View {
         // Initialize local like state from feedItem
         self._localIsLiked = State(initialValue: feedItem.isLiked)
         self._localLikeCount = State(initialValue: feedItem.likeCount)
+        self._localIsSaved = State(initialValue: feedItem.isSaved)  // ✅ NEW
     }
     
     var body: some View {
@@ -305,6 +308,7 @@ struct FeedDetailView: View {
             likeCount: displayItem.likeCount,
             commentCount: displayItem.commentCount,
             isLiked: displayItem.isLiked,
+            isSaved: displayItem.isSaved,  // ✅ Preserve save state
             isFollowing: displayItem.isFollowing,
             user: displayItem.user,
             place: displayItem.place
@@ -475,10 +479,12 @@ struct FeedDetailView: View {
             
             Spacer()
             
+            // ✅ UPDATED: Bookmark button with save state
             FeedActionButton(
                 icon: "bookmark",
                 filledIcon: "bookmark.fill",
-                action: { }
+                isActive: localIsSaved,
+                action: { toggleSave() }
             )
             
             FeedActionButton(
@@ -513,6 +519,28 @@ struct FeedDetailView: View {
         )
     }
     
+    // MARK: - Toggle Save (Bookmark) - Uses SaveService for debouncing
+    
+    private func toggleSave() {
+        SaveService.shared.toggleSave(
+            visitId: displayItem.id,
+            currentlySaved: localIsSaved,
+            onOptimisticUpdate: { [self] newSaved in
+                localIsSaved = newSaved
+                print("🔖 [FeedDetail] Optimistic: \(newSaved)")
+            },
+            onServerResponse: { [self] serverSaved in
+                localIsSaved = serverSaved
+                // Update FeedViewModel if available
+                feedViewModel?.updateSaveState(visitId: displayItem.id, isSaved: serverSaved)
+                print("✅ [FeedDetail] Server synced: \(serverSaved)")
+            },
+            onError: { error in
+                print("❌ [FeedDetail] Save error: \(error)")
+            }
+        )
+    }
+    
     private var currentIsLiked: Bool {
         localIsLiked
     }
@@ -532,7 +560,8 @@ struct FeedDetailView: View {
         if let feedItem = feedViewModel?.getItem(id: displayItem.id) {  // ✅ Optional chaining
             localIsLiked = feedItem.isLiked
             localLikeCount = feedItem.likeCount
-            print("📋 [FeedDetail] Using FeedViewModel state: liked=\(localIsLiked), count=\(localLikeCount)")
+            localIsSaved = feedItem.isSaved  // ✅ Also sync save state
+            print("📋 [FeedDetail] Using FeedViewModel state: liked=\(localIsLiked), count=\(localLikeCount), saved=\(localIsSaved)")
             return
         }
         

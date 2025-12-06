@@ -433,6 +433,76 @@ class FeedViewModel: ObservableObject {
         showAllCaughtUp = false
         error = nil
     }
+    
+    func toggleSave(for item: FeedItem) {
+            guard let index = items.firstIndex(where: { $0.id == item.id }) else { return }
+            
+            let currentlySaved = items[index].isSaved
+            
+            SaveService.shared.toggleSave(
+                visitId: item.id,
+                currentlySaved: currentlySaved,
+                onOptimisticUpdate: { [weak self] newSaved in
+                    guard let self = self,
+                          let idx = self.items.firstIndex(where: { $0.id == item.id }) else { return }
+                    self.items[idx].isSaved = newSaved
+                },
+                onServerResponse: { [weak self] serverSaved in
+                    guard let self = self,
+                          let idx = self.items.firstIndex(where: { $0.id == item.id }) else { return }
+                    self.items[idx].isSaved = serverSaved
+                },
+                onError: { [weak self] _ in
+                    guard let self = self,
+                          let idx = self.items.firstIndex(where: { $0.id == item.id }) else { return }
+                    // Revert to original state on error
+                    self.items[idx].isSaved = currentlySaved
+                }
+            )
+        }
+
+    private func syncSave(itemId: String, shouldBeSaved: Bool) async {
+        do {
+            let body: [String: Any] = ["visit_id": itemId]
+            
+            let response: VisitSaveToggleResponse = try await client.post(
+                path: "/functions/v1/visits-save-toggle",
+                body: body,
+                requiresAuth: true
+            )
+            
+            // Verify server state matches our optimistic update
+            if let index = items.firstIndex(where: { $0.id == itemId }) {
+                if items[index].isSaved != response.isSaved {
+                    // Server disagrees, update to server state
+                    items[index].isSaved = response.isSaved
+                    print("⚠️ [Feed] Save state corrected by server: \(response.isSaved)")
+                } else {
+                    print("✅ [Feed] Save synced: \(itemId) -> \(response.isSaved)")
+                }
+            }
+            
+        } catch {
+            print("❌ [Feed] Save sync error: \(error)")
+            
+            // Revert optimistic update on error
+            if let index = items.firstIndex(where: { $0.id == itemId }) {
+                items[index].isSaved = !shouldBeSaved
+                print("↩️ [Feed] Reverted save state for: \(itemId)")
+            }
+            
+            // Error haptic
+            UINotificationFeedbackGenerator().notificationOccurred(.error)
+        }
+    }
+
+    // MARK: - Update Save State (for external updates)
+
+    func updateSaveState(visitId: String, isSaved: Bool) {
+        if let index = items.firstIndex(where: { $0.id == visitId }) {
+            items[index].isSaved = isSaved
+        }
+    }
 }
 
 // MARK: - Like Toggle Response

@@ -261,6 +261,7 @@ struct FeedCardView: View {
             FeedActionButton(
                 icon: "bookmark",
                 filledIcon: "bookmark.fill",
+                isActive: item.isSaved,  // ✅ ADD THIS LINE
                 action: { onSaveTap?() }
             )
             

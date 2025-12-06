@@ -10,7 +10,6 @@ struct FeedView: View {
     @StateObject private var viewModel = FeedViewModel()
     @ObservedObject private var navigator = NavigationCoordinator.shared
     @State private var showSearch = false
-    @State private var selectedItemForSave: FeedItem?  // ✅ Renamed for clarity
     @State private var selectedPlaceItem: FeedItem?
     @State private var showAddVisitFromPlace = false
     @State private var placeForAddVisit: FeedItem?
@@ -112,8 +111,8 @@ struct FeedView: View {
                         selectedPlaceItem = item
                     },
                     onSaveToList: {
-                        // ✅ Just set the item - sheet(item:) handles presentation
-                        selectedItemForSave = item
+                        // ✅ Toggle save (bookmark) for this visit
+                        viewModel.toggleSave(for: item)
                     },
                     onReport: { },
                     onEdit: {
@@ -125,10 +124,6 @@ struct FeedView: View {
                     }
                 )
             }
-        }
-        // ✅ Use sheet(item:) pattern - guarantees item is non-nil when sheet opens
-        .sheet(item: $selectedItemForSave) { item in
-            SaveToListSheet(placeId: item.place.id, placeName: item.place.displayName)
         }
         .sheet(item: $selectedPlaceItem) { item in
             PlaceDetailSheet(
@@ -293,8 +288,8 @@ struct FeedView: View {
                         onLikeTap: { viewModel.toggleLike(for: item) },
                         onCommentTap: { navigateToDetail = item },
                         onSaveTap: {
-                            // ✅ Just set the item - sheet(item:) handles presentation
-                            selectedItemForSave = item
+                            // ✅ Toggle save (bookmark) for this visit
+                            viewModel.toggleSave(for: item)
                         },
                         onShareTap: { shareItem(item) },
                         onPlaceTap: {
