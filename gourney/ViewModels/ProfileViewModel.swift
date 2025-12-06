@@ -1,11 +1,10 @@
 // ViewModels/ProfileViewModel.swift
-// Profile data management with visits, follow toggle, and map data
+// Profile data management with visits, saved visits, follow toggle, and map data
 // ✅ Production-ready with:
 // - ProfileDataCache for smart data caching
 // - Auto-recovery on errors
 // - Memory-optimized pagination
-// FIX: Added notification listeners for seamless visit updates
-// FIX: Added support for loading by userId (fetches handle first)
+// - Saved visits tab support (own profile only)
 
 import Foundation
 import SwiftUI
@@ -26,9 +25,13 @@ class ProfileViewModel: ObservableObject {
     @Published private(set) var isLoadingVisits = false
     @Published private(set) var hasMoreVisits = true
     
+    // Saved Visits (own profile only)
+    @Published private(set) var savedVisits: [SavedVisit] = []
+    @Published private(set) var isLoadingSavedVisits = false
+    @Published private(set) var hasMoreSavedVisits = true
+    
     // Follow State
     @Published var isFollowing = false
-    @Published private(set) var isTogglingFollow = false
     
     // Bio
     @Published var isBioExpanded = false
@@ -39,8 +42,10 @@ class ProfileViewModel: ObservableObject {
     private var handle: String?
     private var userId: String?
     private var visitsCursor: VisitsCursor?
+    private var savedVisitsCursor: VisitsCursor?
     private var currentProfileTask: Task<Void, Never>?
     private var currentVisitsTask: Task<Void, Never>?
+    private var currentSavedVisitsTask: Task<Void, Never>?
     private var paginationTask: Task<Void, Never>?
     private let pageSize = 9
     
@@ -52,6 +57,9 @@ class ProfileViewModel: ObservableObject {
     
     /// Minimum time between automatic refreshes (30 seconds)
     private let minRefreshInterval: TimeInterval = 30
+    
+    /// Track if saved visits have been loaded at least once
+    private var savedVisitsLoaded = false
     
     // Notification subscriptions
     private var cancellables = Set<AnyCancellable>()
@@ -83,6 +91,7 @@ class ProfileViewModel: ObservableObject {
     deinit {
         currentProfileTask?.cancel()
         currentVisitsTask?.cancel()
+        currentSavedVisitsTask?.cancel()
         paginationTask?.cancel()
         cancellables.removeAll()
     }
@@ -182,6 +191,12 @@ class ProfileViewModel: ObservableObject {
             if let handle = handle {
                 ProfileDataCache.shared.invalidate(handle: handle)
             }
+        }
+        
+        // Also remove from saved visits if present
+        if let savedIndex = savedVisits.firstIndex(where: { $0.id == visitId }) {
+            savedVisits.remove(at: savedIndex)
+            print("🗑️ [ProfileVM] Removed from saved visits: \(visitId)")
         }
     }
     
@@ -331,7 +346,6 @@ class ProfileViewModel: ObservableObject {
                     cursor: visitsCursor
                 )
             }
-            await loadVisitsInternal(refresh: true)
             
         } catch {
             if Task.isCancelled { return }
@@ -520,60 +534,205 @@ class ProfileViewModel: ObservableObject {
         }
     }
     
-    // MARK: - Toggle Follow
+    // MARK: - Load Saved Visits (Own Profile Only)
+    
+    /// Load saved visits - only call for own profile
+    func loadSavedVisits() {
+        guard isOwnProfile else {
+            print("⚠️ [SavedVisits] Not own profile, skipping")
+            return
+        }
+        
+        // If already loaded and not forcing refresh, skip
+        if savedVisitsLoaded && !savedVisits.isEmpty {
+            print("📦 [SavedVisits] Already loaded, using cached data")
+            return
+        }
+        
+        currentSavedVisitsTask?.cancel()
+        currentSavedVisitsTask = Task { [weak self] in
+            await self?.loadSavedVisitsInternal(refresh: true)
+        }
+    }
+    
+    /// Refresh saved visits (pull to refresh)
+    func refreshSavedVisits() async {
+        guard isOwnProfile else { return }
+        await loadSavedVisitsInternal(refresh: true)
+    }
+    
+    private func loadSavedVisitsInternal(refresh: Bool) async {
+        if refresh {
+            savedVisitsCursor = nil
+            hasMoreSavedVisits = true
+        }
+        
+        guard hasMoreSavedVisits else {
+            print("📭 [SavedVisits] No more saved visits to load")
+            return
+        }
+        
+        guard !isLoadingSavedVisits else {
+            print("⚠️ [SavedVisits] Already loading, skipping")
+            return
+        }
+        
+        isLoadingSavedVisits = true
+        
+        do {
+            try Task.checkCancellation()
+            
+            var path = "/functions/v1/saved-visits-list?limit=\(pageSize)"
+            
+            if let cursor = savedVisitsCursor {
+                path += "&cursor_created_at=\(cursor.cursorCreatedAt)"
+                path += "&cursor_id=\(cursor.cursorId)"
+            }
+            
+            print("🔖 [SavedVisits] Fetching: \(path)")
+            
+            let response: SavedVisitsResponse = try await client.get(
+                path: path,
+                requiresAuth: true
+            )
+            
+            try Task.checkCancellation()
+            
+            let hasMore = response.nextCursor != nil
+            print("✅ [SavedVisits] Got \(response.visits.count) saved visits, hasMore: \(hasMore)")
+            
+            if refresh {
+                savedVisits = response.visits
+            } else {
+                let existingIds = Set(savedVisits.map { $0.id })
+                let newVisits = response.visits.filter { !existingIds.contains($0.id) }
+                savedVisits.append(contentsOf: newVisits)
+                print("📊 [SavedVisits] Total saved visits now: \(savedVisits.count)")
+            }
+            
+            hasMoreSavedVisits = hasMore
+            savedVisitsCursor = response.nextCursor
+            isLoadingSavedVisits = false
+            savedVisitsLoaded = true
+            
+        } catch is CancellationError {
+            print("⚠️ [SavedVisits] Task cancelled")
+            isLoadingSavedVisits = false
+        } catch {
+            if Task.isCancelled { return }
+            print("❌ [SavedVisits] Error: \(error)")
+            isLoadingSavedVisits = false
+        }
+    }
+    
+    /// Load more saved visits (pagination)
+    func loadMoreSavedVisits() {
+        guard hasMoreSavedVisits else {
+            print("📜 [SavedVisits] No more to load")
+            return
+        }
+        guard !isLoadingSavedVisits else {
+            print("📜 [SavedVisits] Already loading, skipping")
+            return
+        }
+        
+        print("🚀 [SavedVisits] Loading more...")
+        
+        Task { [weak self] in
+            await self?.loadMoreSavedVisitsWithMinDelay()
+        }
+    }
+    
+    @MainActor
+    private func loadMoreSavedVisitsWithMinDelay() async {
+        isLoadingSavedVisits = true
+        
+        let startTime = Date()
+        
+        do {
+            var path = "/functions/v1/saved-visits-list?limit=\(pageSize)"
+            
+            if let cursor = savedVisitsCursor {
+                path += "&cursor_created_at=\(cursor.cursorCreatedAt)"
+                path += "&cursor_id=\(cursor.cursorId)"
+            }
+            
+            print("🔖 [SavedVisits] Fetching: \(path)")
+            
+            let response: SavedVisitsResponse = try await client.get(
+                path: path,
+                requiresAuth: true
+            )
+            
+            let hasMore = response.nextCursor != nil
+            print("✅ [SavedVisits] Got \(response.visits.count) saved visits, hasMore: \(hasMore)")
+            
+            // Minimum loading time
+            let elapsed = Date().timeIntervalSince(startTime)
+            if elapsed < 0.3 {
+                try? await Task.sleep(nanoseconds: UInt64((0.3 - elapsed) * 1_000_000_000))
+            }
+            
+            let existingIds = Set(savedVisits.map { $0.id })
+            let newVisits = response.visits.filter { !existingIds.contains($0.id) }
+            savedVisits.append(contentsOf: newVisits)
+            
+            hasMoreSavedVisits = hasMore
+            savedVisitsCursor = response.nextCursor
+            isLoadingSavedVisits = false
+            
+        } catch {
+            print("❌ [SavedVisits] Pagination error: \(error)")
+            isLoadingSavedVisits = false
+        }
+    }
+    
+    // MARK: - Toggle Follow (Using FollowService with debouncing)
     
     func toggleFollow() {
         guard let profileId = profile?.id else { return }
-        guard !isTogglingFollow else { return }
         
-        isTogglingFollow = true
-        
-        // Optimistic update
         let wasFollowing = isFollowing
-        isFollowing.toggle()
+        let previousFollowerCount = profile?.followerCount ?? 0
         
-        // Update follower count optimistically
-        if var currentProfile = profile {
-            currentProfile.followerCount += wasFollowing ? -1 : 1
-            profile = currentProfile
-        }
-        
-        // Haptic feedback
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        
-        Task {
-            do {
-                let path = "/functions/v1/follows-manage"
-                print("👥 [Follow] Toggling follow for: \(profileId)")
+        FollowService.shared.toggleFollow(
+            userId: profileId,
+            currentlyFollowing: wasFollowing,
+            onOptimisticUpdate: { [weak self] newFollowing in
+                guard let self = self else { return }
+                self.isFollowing = newFollowing
                 
-                let response: FollowResponse = try await client.post(
-                    path: path,
-                    body: ["followee_id": profileId],
-                    requiresAuth: true
-                )
-                
-                print("✅ [Follow] Result: \(response.action)")
+                // Update follower count optimistically
+                if var currentProfile = self.profile {
+                    currentProfile.followerCount += newFollowing ? 1 : -1
+                    self.profile = currentProfile
+                }
+            },
+            onServerResponse: { [weak self] serverFollowing, serverFollowerCount in
+                guard let self = self else { return }
                 
                 // Sync with server response
-                isFollowing = response.action == "followed"
-                if var currentProfile = profile {
-                    currentProfile.followerCount = response.followerCount
-                    profile = currentProfile
+                self.isFollowing = serverFollowing
+                if var currentProfile = self.profile {
+                    currentProfile.followerCount = serverFollowerCount
+                    currentProfile.isFollowing = serverFollowing
+                    self.profile = currentProfile
                 }
                 
-            } catch {
+                print("✅ [Follow] Confirmed: \(serverFollowing ? "following" : "not following"), followers: \(serverFollowerCount)")
+            },
+            onError: { [weak self] error in
+                guard let self = self else { return }
                 print("❌ [Follow] Error: \(error)")
                 
-                // Rollback
-                isFollowing = wasFollowing
-                if var currentProfile = profile {
-                    currentProfile.followerCount += wasFollowing ? 1 : -1
-                    profile = currentProfile
+                // Rollback to previous state
+                self.isFollowing = wasFollowing
+                if var currentProfile = self.profile {
+                    currentProfile.followerCount = previousFollowerCount
+                    self.profile = currentProfile
                 }
             }
-            
-            isTogglingFollow = false
-        }
+        )
     }
     
     // MARK: - Refresh (Pull to refresh)
@@ -596,6 +755,12 @@ class ProfileViewModel: ObservableObject {
         
         // Fetch fresh data
         await performLoadProfile()
+        
+        // Also refresh saved visits if on own profile
+        if isOwnProfile {
+            savedVisitsLoaded = false
+            await loadSavedVisitsInternal(refresh: true)
+        }
     }
     
     // MARK: - Memory Management
@@ -603,12 +768,19 @@ class ProfileViewModel: ObservableObject {
     func cleanup() {
         currentProfileTask?.cancel()
         currentVisitsTask?.cancel()
+        currentSavedVisitsTask?.cancel()
         paginationTask?.cancel()
         
         // ✅ Trim visits array to prevent memory bloat
         if visits.count > 50 {
             visits = Array(visits.prefix(50))
             hasMoreVisits = true
+        }
+        
+        // Trim saved visits too
+        if savedVisits.count > 50 {
+            savedVisits = Array(savedVisits.prefix(50))
+            hasMoreSavedVisits = true
         }
         
         // Update cache with trimmed data
@@ -627,6 +799,7 @@ class ProfileViewModel: ObservableObject {
     func reset() {
         currentProfileTask?.cancel()
         currentVisitsTask?.cancel()
+        currentSavedVisitsTask?.cancel()
         paginationTask?.cancel()
         
         // ✅ Invalidate cache for this profile before clearing
@@ -636,10 +809,14 @@ class ProfileViewModel: ObservableObject {
         
         profile = nil
         visits = []
+        savedVisits = []
         visitsCursor = nil
+        savedVisitsCursor = nil
         hasMoreVisits = true
+        hasMoreSavedVisits = true
         isFollowing = false
         isLoadingVisits = false
+        isLoadingSavedVisits = false
         isLoading = false
         error = nil
         isBioExpanded = false
@@ -647,6 +824,7 @@ class ProfileViewModel: ObservableObject {
         userId = nil
         loadedFromCache = false
         lastLoadTime = nil
+        savedVisitsLoaded = false
     }
 }
 
@@ -714,6 +892,85 @@ struct ProfileVisit: Codable, Identifiable, Equatable {
     }
 }
 
+// MARK: - Saved Visit Model (includes user info)
+
+struct SavedVisit: Codable, Identifiable, Equatable {
+    let id: String
+    let rating: Int?
+    let comment: String?
+    let photoUrls: [String]?
+    let visibility: String
+    let visitedAt: String
+    let createdAt: String
+    let savedAt: String?
+    let user: SavedVisitUser?
+    let place: ProfilePlace?
+    
+    var photos: [String] { photoUrls ?? [] }
+    var hasPhotos: Bool { !photos.isEmpty }
+    
+    static func == (lhs: SavedVisit, rhs: SavedVisit) -> Bool {
+        lhs.id == rhs.id &&
+        lhs.rating == rhs.rating &&
+        lhs.photoUrls == rhs.photoUrls
+    }
+    
+    /// Convert to ProfileVisit for reusing ProfileVisitCard
+    func toProfileVisit() -> ProfileVisit {
+        ProfileVisit(
+            id: id,
+            rating: rating,
+            comment: comment,
+            photoUrls: photoUrls,
+            visibility: visibility,
+            visitedAt: visitedAt,
+            createdAt: createdAt,
+            place: place
+        )
+    }
+    
+    /// Convert to FeedItem for navigation to detail
+    func toFeedItem() -> FeedItem {
+        FeedItem(
+            id: id,
+            rating: rating,
+            comment: comment,
+            photoUrls: photoUrls,
+            visibility: visibility,
+            createdAt: createdAt,
+            visitedAt: visitedAt,
+            likeCount: 0,
+            commentCount: 0,
+            isLiked: false,
+            isSaved: true,
+            isFollowing: true,
+            user: FeedUser(
+                id: user?.id ?? "unknown",
+                handle: user?.handle ?? "unknown",
+                displayName: user?.displayName,
+                avatarUrl: user?.avatarUrl
+            ),
+            place: place?.toFeedPlace() ?? FeedPlace(
+                id: "unknown",
+                nameEn: "Unknown",
+                nameJa: nil,
+                nameZh: nil,
+                city: nil,
+                ward: nil,
+                country: nil,
+                categories: nil
+            )
+        )
+    }
+}
+
+struct SavedVisitUser: Codable, Equatable {
+    let id: String
+    let handle: String
+    let displayName: String?
+    let avatarUrl: String?
+}
+
 struct ProfilePlace: Codable {
     let id: String
     let nameEn: String?
@@ -766,6 +1023,7 @@ extension ProfileVisit {
             likeCount: 0,
             commentCount: 0,
             isLiked: false,
+            isSaved: false,
             isFollowing: true,
             user: FeedUser(
                 id: user.id,
@@ -795,20 +1053,17 @@ struct ProfileVisitsResponse: Codable {
     
 }
 
+struct SavedVisitsResponse: Codable {
+    let visits: [SavedVisit]
+    let nextCursor: VisitsCursor?
+}
+
 // ✅ FIX: VisitsCursor with explicit CodingKeys
 // API returns: { "cursor_created_at": "...", "cursor_id": "..." }
 // Must use explicit CodingKeys to map snake_case JSON keys to camelCase properties
 struct VisitsCursor: Codable {
     let cursorCreatedAt: String
     let cursorId: String
-    
-}
-
-struct FollowResponse: Codable {
-    let success: Bool
-    let action: String
-    let followeeId: String
-    let followerCount: Int
     
 }
 

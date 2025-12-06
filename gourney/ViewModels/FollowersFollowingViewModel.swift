@@ -1,6 +1,7 @@
 // ViewModels/FollowersFollowingViewModel.swift
 // Manages followers/following list data with pagination
 // Production-ready with memory optimization
+// ✅ Uses FollowService for debounced follow/unfollow
 
 import Foundation
 import Combine
@@ -39,7 +40,6 @@ struct FollowUserItem: Codable, Identifiable, Equatable {
         }
         return userHandle
     }
-    // No CodingKeys needed - automatic snake_case conversion handles it
 }
 
 // MARK: - API Response
@@ -48,17 +48,6 @@ struct FollowsListResponse: Codable {
     let users: [FollowUserItem]
     let totalCount: Int
     let nextCursor: String?
-    // No CodingKeys needed - automatic snake_case conversion handles it
-}
-
-// Simple response for follow toggle - no CodingKeys needed
-struct FollowToggleResponse: Codable {
-    let success: Bool
-    let action: String
-    let followeeId: String
-    let followeeHandle: String
-    let followerCount: Int
-    // No CodingKeys - automatic conversion handles snake_case → camelCase
 }
 
 // MARK: - ViewModel
@@ -73,9 +62,6 @@ class FollowersFollowingViewModel: ObservableObject {
     @Published private(set) var error: String?
     @Published private(set) var totalCount: Int = 0
     @Published private(set) var hasMore = true
-    
-    // For toggling follow state
-    @Published private(set) var togglingFollowIds: Set<String> = []
     
     // MARK: - Private Properties
     
@@ -187,49 +173,51 @@ class FollowersFollowingViewModel: ObservableObject {
         }
     }
     
-    // MARK: - Toggle Follow
+    // MARK: - Toggle Follow (Using FollowService with debouncing)
     
     func toggleFollow(for user: FollowUserItem) {
-        guard !togglingFollowIds.contains(user.id) else { return }
-        
         // Don't allow following yourself
         if user.userId == AuthManager.shared.currentUser?.id {
             return
         }
         
-        togglingFollowIds.insert(user.id)
+        guard let index = users.firstIndex(where: { $0.id == user.id }) else { return }
         
-        Task { [weak self] in
-            guard let self = self else { return }
-            
-            do {
-                let method = user.isFollowing ? "DELETE" : "POST"
-                let path = "/functions/v1/follows-manage?user_id=\(user.userId)"
-                
-                print("🔄 [FollowList] \(user.isFollowing ? "Unfollowing" : "Following") @\(user.userHandle)")
-                
-                // Use FollowToggleResponse - no CodingKeys so auto-conversion works
-                let _: FollowToggleResponse = try await client.request(
-                    path: path,
-                    method: method,
-                    requiresAuth: true
-                )
-                
-                // Update local state
-                if let index = self.users.firstIndex(where: { $0.id == user.id }) {
-                    var updatedUser = self.users[index]
-                    updatedUser.isFollowing.toggle()
-                    self.users[index] = updatedUser
+        let wasFollowing = users[index].isFollowing
+        
+        FollowService.shared.toggleFollow(
+            userId: user.userId,
+            currentlyFollowing: wasFollowing,
+            onOptimisticUpdate: { [weak self] newFollowing in
+                guard let self = self else { return }
+                // Update local state optimistically
+                if let idx = self.users.firstIndex(where: { $0.id == user.id }) {
+                    var updatedUser = self.users[idx]
+                    updatedUser.isFollowing = newFollowing
+                    self.users[idx] = updatedUser
                 }
-                
-                print("✅ [FollowList] Follow toggled for @\(user.userHandle)")
-                
-            } catch {
+            },
+            onServerResponse: { [weak self] serverFollowing, _ in
+                guard let self = self else { return }
+                // Sync with server response
+                if let idx = self.users.firstIndex(where: { $0.id == user.id }) {
+                    var updatedUser = self.users[idx]
+                    updatedUser.isFollowing = serverFollowing
+                    self.users[idx] = updatedUser
+                }
+                print("✅ [FollowList] Follow toggled for @\(user.userHandle) -> \(serverFollowing)")
+            },
+            onError: { [weak self] error in
+                guard let self = self else { return }
                 print("❌ [FollowList] Toggle follow error: \(error)")
+                // Rollback on error
+                if let idx = self.users.firstIndex(where: { $0.id == user.id }) {
+                    var updatedUser = self.users[idx]
+                    updatedUser.isFollowing = wasFollowing
+                    self.users[idx] = updatedUser
+                }
             }
-            
-            self.togglingFollowIds.remove(user.id)
-        }
+        )
     }
     
     // MARK: - Memory Management

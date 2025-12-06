@@ -1,8 +1,8 @@
 // Views/Profile/ProfileView.swift
-// User profile with visits grid and mini-map
+// User profile with visits grid, mini-map, and saved visits tab
 // Production-ready with memory optimization
-// ✅ NEW: Added navigation to Followers/Following list views
-// ✅ FIX: Proper bottom safe area padding for tab bar
+// ✅ NEW: Added Saved tab for own profile (bookmarked visits)
+// ✅ FIX: Removed spacing between tabs and content
 
 import SwiftUI
 import MapKit
@@ -231,12 +231,16 @@ struct ProfileView: View {
                 tabPicker
                     .padding(.top, 20)
                 
-                // Tab Content (reduced gap)
+                // Tab Content - ✅ REMOVED spacing
                 tabContent
                 
-                // ✅ Pagination trigger - only for visits tab
+                // ✅ Pagination trigger - for visits or saved tab
                 if selectedTab == 0 && viewModel.hasMoreVisits && !viewModel.isLoadingVisits && !viewModel.visits.isEmpty {
-                    paginationTrigger
+                    visitsPaginationTrigger
+                }
+                
+                if selectedTab == 2 && viewModel.hasMoreSavedVisits && !viewModel.isLoadingSavedVisits && !viewModel.savedVisits.isEmpty {
+                    savedVisitsPaginationTrigger
                 }
             }
         }
@@ -246,18 +250,30 @@ struct ProfileView: View {
         .scrollIndicators(.hidden)
     }
     
-    // MARK: - Pagination Trigger (Instagram-style)
-    // Uses GeometryReader onChange - only fires when scroll position CHANGES (not on initial load)
+    // MARK: - Pagination Triggers
     
-    private var paginationTrigger: some View {
+    private var visitsPaginationTrigger: some View {
         GeometryReader { geo in
             Color.clear
                 .onChange(of: geo.frame(in: .global).minY) { _, minY in
-                    // Check if this trigger view is visible on screen
                     let screenHeight = UIScreen.main.bounds.height
                     if minY < screenHeight && minY > 0 {
                         print("📜 [Profile] 🔥 Bottom trigger visible (y: \(Int(minY))) - loading more visits")
                         viewModel.loadMoreVisits()
+                    }
+                }
+        }
+        .frame(height: 50)
+    }
+    
+    private var savedVisitsPaginationTrigger: some View {
+        GeometryReader { geo in
+            Color.clear
+                .onChange(of: geo.frame(in: .global).minY) { _, minY in
+                    let screenHeight = UIScreen.main.bounds.height
+                    if minY < screenHeight && minY > 0 {
+                        print("📜 [Profile] 🔥 Bottom trigger visible (y: \(Int(minY))) - loading more saved visits")
+                        viewModel.loadMoreSavedVisits()
                     }
                 }
         }
@@ -285,10 +301,23 @@ struct ProfileView: View {
                 
                 // Lists + Visits Row
                 HStack(spacing: 20) {
-                    // Lists (tappable)
-                    Button {
-                        showListsView = true
-                    } label: {
+                    // Lists (tappable - only for own profile)
+                    if viewModel.isOwnProfile {
+                        Button {
+                            showListsView = true
+                        } label: {
+                            VStack(spacing: 2) {
+                                Text("\(profile.listCount)")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundColor(.primary)
+                                Text("lists")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        // Non-tappable for other profiles
                         VStack(spacing: 2) {
                             Text("\(profile.listCount)")
                                 .font(.system(size: 16, weight: .semibold))
@@ -298,7 +327,6 @@ struct ProfileView: View {
                                 .foregroundColor(.secondary)
                         }
                     }
-                    .buttonStyle(.plain)
                     
                     // Visits (non-tappable for now)
                     VStack(spacing: 2) {
@@ -432,36 +460,27 @@ struct ProfileView: View {
                 Button {
                     viewModel.toggleFollow()
                 } label: {
-                    HStack(spacing: 6) {
-                        if viewModel.isTogglingFollow {
-                            ProgressView()
-                                .scaleEffect(0.7)
-                                .tint(viewModel.isFollowing ? GourneyColors.coral : .white)
-                        }
-                        
-                        Text(viewModel.isFollowing ? "Following" : "Follow")
-                            .font(.system(size: 14, weight: .semibold))
-                    }
-                    .foregroundColor(viewModel.isFollowing ? GourneyColors.coral : .white)
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 8)
-                    .background(
-                        viewModel.isFollowing
-                        ? Color(.systemGray5)
-                        : GourneyColors.coral
-                    )
-                    .cornerRadius(6)
+                    Text(viewModel.isFollowing ? "Following" : "Follow")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 8)
+                        .background(
+                            viewModel.isFollowing
+                            ? Color(.systemGray3)
+                            : GourneyColors.coral
+                        )
+                        .cornerRadius(6)
                 }
-                .disabled(viewModel.isTogglingFollow)
             }
         }
         .frame(maxWidth: .infinity, alignment: .center)
     }
     
-    // MARK: - Tab Picker (DiscoverView Style with Underline)
+    // MARK: - Tab Picker (Dynamic: 2 tabs for others, 3 tabs for own profile)
     
     private var tabPicker: some View {
-        HStack(spacing: 40) {
+        HStack(spacing: isOwnProfile ? 24 : 40) {
             // Visits Tab
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) {
@@ -479,7 +498,7 @@ struct ProfileView: View {
                 }
             }
             .buttonStyle(.plain)
-            .frame(width: 80)
+            .frame(width: 60)
             
             // Map Tab
             Button {
@@ -498,22 +517,46 @@ struct ProfileView: View {
                 }
             }
             .buttonStyle(.plain)
-            .frame(width: 80)
+            .frame(width: 60)
+            
+            // Saved Tab (own profile only)
+            if isOwnProfile {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        selectedTab = 2
+                    }
+                    // Load saved visits when tab is first selected
+                    viewModel.loadSavedVisits()
+                } label: {
+                    VStack(spacing: 6) {
+                        Text("Saved")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(selectedTab == 2 ? GourneyColors.coral : .secondary)
+                        
+                        Rectangle()
+                            .fill(selectedTab == 2 ? GourneyColors.coral : Color.clear)
+                            .frame(height: 2)
+                    }
+                }
+                .buttonStyle(.plain)
+                .frame(width: 60)
+            }
         }
         .padding(.horizontal, 16)
     }
     
-    // MARK: - Tab Content (Reduced gap)
+    // MARK: - Tab Content (✅ No top padding)
     
     private var tabContent: some View {
         Group {
             if selectedTab == 0 {
                 visitsGrid
-            } else {
+            } else if selectedTab == 1 {
                 profileMapView
+            } else if selectedTab == 2 && isOwnProfile {
+                savedVisitsGrid
             }
         }
-        .padding(.top, 8)
     }
     
     // MARK: - Visits Grid (3 columns, 4:5 ratio) - Instagram Style
@@ -562,6 +605,75 @@ struct ProfileView: View {
                 
                 // ✅ FeedView-style: Centered loading spinner during pagination
                 if viewModel.isLoadingVisits {
+                    HStack {
+                        Spacer()
+                        ProgressView()
+                            .tint(GourneyColors.coral)
+                        Spacer()
+                    }
+                    .padding(.vertical, 20)
+                }
+            }
+        }
+    }
+    
+    // MARK: - Saved Visits Grid (own profile only)
+    
+    @ViewBuilder
+    private var savedVisitsGrid: some View {
+        if viewModel.isLoadingSavedVisits && viewModel.savedVisits.isEmpty {
+            // Initial loading state
+            CenteredLoadingView()
+                .frame(height: 300)
+        } else if viewModel.savedVisits.isEmpty {
+            // Empty state
+            VStack(spacing: 12) {
+                Image(systemName: "bookmark")
+                    .font(.system(size: 40))
+                    .foregroundColor(GourneyColors.coral.opacity(0.5))
+                Text("No saved visits")
+                    .font(.system(size: 15))
+                    .foregroundColor(.secondary)
+                Text("Bookmark visits to save them here")
+                    .font(.system(size: 13))
+                    .foregroundColor(.secondary.opacity(0.7))
+            }
+            .frame(height: 200)
+        } else {
+            VStack(spacing: 0) {
+                // Grid content - reuse ProfileVisitCard via conversion
+                LazyVGrid(
+                    columns: [
+                        GridItem(.flexible(), spacing: 2),
+                        GridItem(.flexible(), spacing: 2),
+                        GridItem(.flexible(), spacing: 2)
+                    ],
+                    spacing: 2
+                ) {
+                    ForEach(viewModel.savedVisits) { savedVisit in
+                        ProfileVisitCard(visit: savedVisit.toProfileVisit())
+                            .aspectRatio(4/5, contentMode: .fill)
+                            .overlay(alignment: .topLeading) {
+                                // Small user avatar indicator
+                                if let avatarUrl = savedVisit.user?.avatarUrl {
+                                    AvatarView(url: avatarUrl, size: 20)
+                                        .overlay(
+                                            Circle()
+                                                .stroke(Color.white, lineWidth: 1.5)
+                                        )
+                                        .padding(4)
+                                }
+                            }
+                            .onTapGesture {
+                                let feedItem = savedVisit.toFeedItem()
+                                navigationPath.append(feedItem)
+                            }
+                    }
+                }
+                .padding(.horizontal, 2)
+                
+                // Loading spinner during pagination
+                if viewModel.isLoadingSavedVisits {
                     HStack {
                         Spacer()
                         ProgressView()

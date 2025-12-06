@@ -2,6 +2,7 @@
 // Shared component for displaying followers/following lists
 // Instagram-style design with coral theme
 // Supports navigation to user profiles
+// ✅ Uses FollowService for instant optimistic UI
 
 import SwiftUI
 
@@ -201,7 +202,6 @@ struct FollowersFollowingListView: View {
                 ForEach(filteredUsers) { user in
                     FollowUserRow(
                         user: user,
-                        isToggling: viewModel.togglingFollowIds.contains(user.id),
                         onFollowTap: {
                             viewModel.toggleFollow(for: user)
                         },
@@ -301,11 +301,10 @@ struct FollowersFollowingListView: View {
     }
 }
 
-// MARK: - Follow User Row
+// MARK: - Follow User Row (Instant UI - no spinner)
 
 struct FollowUserRow: View {
     let user: FollowUserItem
-    let isToggling: Bool
     let onFollowTap: () -> Void
     let onRowTap: () -> Void
     
@@ -350,23 +349,14 @@ struct FollowUserRow: View {
         Button {
             onFollowTap()
         } label: {
-            Group {
-                if isToggling {
-                    ProgressView()
-                        .scaleEffect(0.8)
-                        .tint(.white)
-                } else {
-                    Text(user.isFollowing ? "Following" : "Follow")
-                        .font(.system(size: 14, weight: .semibold))
-                }
-            }
-            .foregroundColor(.white)
-            .frame(width: 100, height: 34)
-            .background(GourneyColors.coral)
-            .cornerRadius(8)
+            Text(user.isFollowing ? "Following" : "Follow")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(.white)
+                .frame(width: 100, height: 34)
+                .background(user.isFollowing ? Color(.systemGray3) : GourneyColors.coral)
+                .cornerRadius(8)
         }
         .buttonStyle(.plain)
-        .disabled(isToggling)
     }
 }
 

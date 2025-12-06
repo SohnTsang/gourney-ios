@@ -890,6 +890,9 @@
     "Bio" : {
 
     },
+    "Bookmark visits to save them here" : {
+
+    },
     "Call" : {
 
     },
@@ -2572,6 +2575,9 @@
     "No results found" : {
 
     },
+    "No saved visits" : {
+
+    },
     "No users found" : {
 
     },
@@ -3216,6 +3222,9 @@
 
     },
     "Save to List" : {
+
+    },
+    "Saved" : {
 
     },
     "Search" : {
